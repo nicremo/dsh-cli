@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for dsh-cli or the agent skill
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do with your agent and DeepSeek Harness?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The command, flag or behaviour you would like.

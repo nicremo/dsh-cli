@@ -1,0 +1,29 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected and what you got. Add `--json` output if possible.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: dsho doctor
+      description: Output of `dsho doctor`. Remove tokens and private paths.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "dsho --version, node --version, dsh --version, OS"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [web UI, headless, not sure]

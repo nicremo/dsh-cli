@@ -1,0 +1,55 @@
+{
+  "name": "dsh-cli",
+  "version": "0.1.0",
+  "description": "Agent-first CLI that lets Claude Code, Codex, OpenCode, Pi and other agent harnesses run DeepSeek Harness (dsh) sessions in parallel: research batches, material gathering, live in the DSH web UI.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Fabian Bitzer (https://github.com/nicremo)",
+  "homepage": "https://github.com/nicremo/dsh-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicremo/dsh-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nicremo/dsh-cli/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "ai-agents",
+    "agent-orchestration",
+    "claude-code",
+    "codex",
+    "opencode",
+    "pi",
+    "agent-skills",
+    "research",
+    "parallel",
+    "cli",
+    "playwright",
+    "screenshots"
+  ],
+  "bin": {
+    "dsh-cli": "bin/dsho.mjs",
+    "dsho": "bin/dsho.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "capture/capture.py",
+    "skills/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=4 'test/**/*.test.mjs'"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

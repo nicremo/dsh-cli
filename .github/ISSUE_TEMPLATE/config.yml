@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: DeepSeek Harness itself
+    url: https://github.com/deepseek-ai/deepseek-harness/issues
+    about: Problems with dsh, its web UI or its models belong to the DeepSeek Harness project.
