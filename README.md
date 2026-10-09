@@ -9,6 +9,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933)
 
+**[deepseekharnesscli.nicremo.de](https://deepseekharnesscli.nicremo.de)**
+
 <img src="assets/demo.gif" alt="An agent asks DeepSeek Harness to research 10 topics in parallel through dsh-cli; ten sessions run live in the DSH web UI and the results flow back as one INDEX.md" width="100%">
 
 </div>
