@@ -4,7 +4,7 @@
 
 **Let Claude Code, Codex, OpenCode, Pi or any other agent run DeepSeek Harness sessions in parallel.**
 
-[![npm](https://img.shields.io/npm/v/dsh-cli?color=4D6BFE&label=npm)](https://www.npmjs.com/package/dsh-cli)
+[![npm](https://img.shields.io/npm/v/@nicremo/dsh-cli?color=4D6BFE&label=npm)](https://www.npmjs.com/package/@nicremo/dsh-cli)
 [![CI](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933)
@@ -62,7 +62,7 @@ flowchart LR
 ## Install
 
 ```sh
-npm install -g dsh-cli && dsho setup
+npm install -g @nicremo/dsh-cli && dsho setup
 ```
 
 `dsho setup` creates the headless dsh profile `orchestra` and installs the `dsh-orchestration` skill into `~/.agents/skills` (read by OpenCode and other harnesses) with links for Claude Code, Codex and Pi when they are installed. Run `dsho doctor` to check everything.
