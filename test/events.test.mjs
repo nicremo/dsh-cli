@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fold, initialState, parseLines, timeline } from '../src/events.mjs'
-import { credentialEnv, resolveModel, spawnSpec } from '../src/dsh.mjs'
+import { credentialEnv, modelSelection, resolveModel, spawnSpec } from '../src/dsh.mjs'
 
 // Keep the user's ~/.dsho/config.json out of these tests.
 process.env.DSHO_HOME = mkdtempSync(join(tmpdir(), 'dsho-events-'))
@@ -131,5 +131,34 @@ test('credentialEnv is empty without a credentials file', () => {
     assert.deepEqual(credentialEnv(), {})
   } finally {
     delete process.env.DSH_HOME
+  }
+})
+
+test('resolveModel maps aliases to OpenRouter catalog ids', () => {
+  assert.equal(resolveModel('v4-flash', 'openrouter'), 'deepseek/deepseek-v4-flash')
+  assert.equal(resolveModel('pro', 'openrouter'), 'deepseek/deepseek-v4-pro')
+  assert.equal(resolveModel('flash', 'openrouter'), '~deepseek/deepseek-flash-latest')
+  assert.equal(resolveModel('deepseek/deepseek-v3.2', 'openrouter'), 'deepseek/deepseek-v3.2')
+  assert.equal(resolveModel('v4-flash', 'deepseek-official'), 'deepseek-v4-flash')
+})
+
+test('provider and model settings drive the per-job settings, -m still wins', () => {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsho-dshhome-'))
+  const jobDir = mkdtempSync(join(tmpdir(), 'dsho-job-'))
+  process.env.DSH_HOME = dshHome
+  process.env.DSHO_DSH_BIN = '/usr/bin/true'
+  process.env.DSHO_PROVIDER = 'openrouter'
+  process.env.DSHO_MODEL = 'v4-flash'
+  try {
+    const spec = spawnSpec({ jobDir })
+    assert.ok(spec.args.includes('--patch'), 'a configured provider writes the override without -m')
+    const settings = JSON.parse(readFileSync(join(jobDir, 'settings.yaml'), 'utf8'))
+    assert.deepEqual(settings['agent-default-model'], { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' })
+    assert.equal(modelSelection({ model: 'pro' }, {}).model, 'deepseek/deepseek-v4-pro')
+  } finally {
+    delete process.env.DSH_HOME
+    delete process.env.DSHO_DSH_BIN
+    delete process.env.DSHO_PROVIDER
+    delete process.env.DSHO_MODEL
   }
 })

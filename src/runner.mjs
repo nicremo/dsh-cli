@@ -4,7 +4,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readDshSettings, resolveModel, spawnSpec } from './dsh.mjs'
+import { cfg } from './config.mjs'
+import { modelSelection, spawnSpec } from './dsh.mjs'
 import { fold, initialState } from './events.mjs'
 import { home, jobDir, logsDir } from './paths.mjs'
 import { createJob, readJobRaw, TERMINAL, updateJob } from './store.mjs'
@@ -279,14 +280,8 @@ async function runWeb(id) {
     } else {
       updateJob(id, { sessionId, web: { baseUrl: web.baseUrl(), ...(job.web ?? {}) } })
     }
-    if (job.model || job.effort) {
-      const current = readDshSettings()['agent-default-model'] ?? {}
-      const reasoningEffort = job.effort ?? current.reasoningEffort
-      await web.selectModel(sessionId, {
-        provider: current.provider ?? 'deepseek-official',
-        model: resolveModel(job.model) ?? current.model ?? 'deepseek-flash',
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-      })
+    if (job.model || job.effort || cfg('provider') || cfg('model')) {
+      await web.selectModel(sessionId, modelSelection({ model: job.model, effort: job.effort }))
     }
     record([{ type: 'session', sessionId, cwd: job.cwd }])
     let lastSeq = await web.cursor(sessionId)

@@ -107,6 +107,8 @@ Opt out with `--no-dismiss`, `--keep-overlays`, `--allow-ads`.
 
 Default comes from `~/.dsh/settings.yaml`. Per job or batch:
 `-m pro` (deepseek-v4-pro for hard analysis), `-m v4-flash`, `--effort off|low|high|max`.
+`dsho config set provider openrouter` and `dsho config set model v4-flash` set the provider
+route and default model for all jobs (check them with `dsho config`).
 
 ## Limits and rules
 

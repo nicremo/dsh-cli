@@ -168,6 +168,10 @@ Headless dsh reads provider keys (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, ...)
 | `backend` | `DSHO_BACKEND` | `auto`, `web` or `headless` |
 | `workspaces` | `DSHO_WORKSPACES` | root for new workspaces (default `~/dsh-workspaces`) |
 | `python` | `DSHO_PYTHON` | Python with Playwright for captures |
+| `provider` | `DSHO_PROVIDER` | model provider route for workers, e.g. `openrouter` (default: `~/.dsh/settings.yaml`, else `deepseek-official`) |
+| `model` | `DSHO_MODEL` | default model for jobs without `-m`, e.g. `v4-flash` |
+
+With `provider openrouter`, the short names map to OpenRouter catalog ids: `v4-flash` → `deepseek/deepseek-v4-flash`, `pro` → `deepseek/deepseek-v4-pro`, `flash` → `~deepseek/deepseek-flash-latest`.
 
 Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh home, default `~/.dsh`), `DSHO_WEB_TOKEN_URL` / `DSHO_WEB_TOKEN_FILE` (token URL of the web UI).
 

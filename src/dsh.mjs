@@ -26,9 +26,15 @@ const MODEL_ALIASES = {
 }
 export const EFFORTS = ['off', 'low', 'high', 'max']
 
-export function resolveModel(model) {
+// Provider routes that list DeepSeek models as "deepseek/<id>" (OpenRouter-style catalogs)
+const VENDOR_PREFIXED = new Set(['openrouter'])
+
+export function resolveModel(model, provider) {
   if (!model) return null
-  return MODEL_ALIASES[model] ?? model
+  const id = MODEL_ALIASES[model] ?? model
+  if (!VENDOR_PREFIXED.has(provider) || id.includes('/')) return id
+  // The rolling aliases are "~deepseek/deepseek-flash-latest" there, versioned models "deepseek/<id>"
+  return /^deepseek-(flash|pro)$/.test(id) ? `~deepseek/${id}-latest` : `deepseek/${id}`
 }
 
 /** First executable named `name` on PATH, or null. On Windows also tries the PATHEXT extensions. */
@@ -150,19 +156,25 @@ export function activeProfile() {
   return existsSync(join(profileDir(PROFILE), 'package.json')) ? PROFILE : 'headless'
 }
 
+/** Provider, model and effort for one job: dsho config `provider`/`model` win over ~/.dsh/settings.yaml. */
+export function modelSelection({ model, effort }, settings = readDshSettings()) {
+  const current = settings['agent-default-model'] ?? {}
+  const reasoningEffort = effort ?? current.reasoningEffort
+  const provider = cfg('provider') ?? current.provider ?? 'deepseek-official'
+  return {
+    provider,
+    model: resolveModel(model ?? cfg('model'), provider) ?? resolveModel(current.model, provider) ?? resolveModel('flash', provider),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  }
+}
+
 /** Per-job settings copy with a different default model; returns the patch path. */
 function writeSettingsOverride(jobDir, { model, effort }) {
   if (effort && !EFFORTS.includes(effort)) {
     throw new DshoError(`Invalid effort "${effort}". Allowed: ${EFFORTS.join(', ')}`, 2)
   }
   const settings = readDshSettings()
-  const current = settings['agent-default-model'] ?? {}
-  const reasoningEffort = effort ?? current.reasoningEffort
-  settings['agent-default-model'] = {
-    provider: current.provider ?? 'deepseek-official',
-    model: resolveModel(model) ?? current.model ?? 'deepseek-flash',
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-  }
+  settings['agent-default-model'] = modelSelection({ model, effort }, settings)
   const settingsPath = join(jobDir, 'settings.yaml')
   // JSON is valid YAML, so the dsh settings loader reads it unchanged.
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 })
@@ -181,7 +193,8 @@ export function spawnSpec({ sessionId, model, effort, jobDir }) {
   if (dsh.kind === 'custom') return { cmd: dsh.cmd, args: [...dsh.prefix, ...tail], env: { ...process.env }, profile: 'custom' }
   const profile = activeProfile()
   const args = [...dsh.prefix, '--profile', profile]
-  if (model || effort) args.push('--patch', writeSettingsOverride(jobDir, { model, effort }))
+  // A configured provider or model needs the per-job settings even without -m or --effort
+  if (model || effort || cfg('provider') || cfg('model')) args.push('--patch', writeSettingsOverride(jobDir, { model, effort }))
   args.push(...tail)
   return { cmd: dsh.cmd, args, env: { ...credentialEnv(), ...process.env, ...dsh.env, DSHO_JOB: '1' }, profile }
 }

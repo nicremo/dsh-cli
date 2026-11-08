@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `provider` and `model` config keys (`DSHO_PROVIDER`, `DSHO_MODEL`) for the provider route and the default model of every job, shared by the headless and web backends; with `openrouter`, short names map to `deepseek/<id>` catalog ids.
 - Headless workers receive provider keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` (the environment wins).
 
 ### Fixed
