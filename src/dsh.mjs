@@ -122,6 +122,24 @@ export function dshCommand(args) {
   return { cmd: dsh.cmd, args: [...dsh.prefix, ...args], env: { ...process.env, ...dsh.env }, dsh }
 }
 
+/**
+ * API keys that the dsh desktop or web app stored under `refs` in ~/.dsh/.credentials.yaml.
+ * Headless dsh reads provider keys only from the environment, so workers get them there.
+ * Variables already set in the environment win; values are never printed.
+ */
+export function credentialEnv() {
+  const file = join(dshHome(), '.credentials.yaml')
+  if (!existsSync(file)) return {}
+  try {
+    const refs = yaml.load(readFileSync(file, 'utf8'))?.refs ?? {}
+    return Object.fromEntries(
+      Object.entries(refs).filter(([key, value]) => /^[A-Z][A-Z0-9_]*$/.test(key) && typeof value === 'string' && value && !process.env[key]),
+    )
+  } catch {
+    return {}
+  }
+}
+
 export function readDshSettings() {
   const file = join(dshHome(), 'settings.yaml')
   if (!existsSync(file)) return {}
@@ -165,5 +183,5 @@ export function spawnSpec({ sessionId, model, effort, jobDir }) {
   const args = [...dsh.prefix, '--profile', profile]
   if (model || effort) args.push('--patch', writeSettingsOverride(jobDir, { model, effort }))
   args.push(...tail)
-  return { cmd: dsh.cmd, args, env: { ...process.env, ...dsh.env, DSHO_JOB: '1' }, profile }
+  return { cmd: dsh.cmd, args, env: { ...credentialEnv(), ...process.env, ...dsh.env, DSHO_JOB: '1' }, profile }
 }

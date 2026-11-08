@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Headless workers receive provider keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` (the environment wins).
+
 ### Fixed
 - Windows: `dshBin` can be a `.cmd` shim (npm or the DeepSeek Harness desktop app); `which` tries `.exe`/`.cmd`/`.bat`; workers run without console windows; `cancel` ends the whole process tree; skills are linked with junctions, which need no admin rights.
 - Tests run on Windows (no hard-coded `/` paths, CRLF checkouts, isolated home directory).

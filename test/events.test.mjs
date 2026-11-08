@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fold, initialState, parseLines, timeline } from '../src/events.mjs'
-import { resolveModel, spawnSpec } from '../src/dsh.mjs'
+import { credentialEnv, resolveModel, spawnSpec } from '../src/dsh.mjs'
 
 // Keep the user's ~/.dsho/config.json out of these tests.
 process.env.DSHO_HOME = mkdtempSync(join(tmpdir(), 'dsho-events-'))
@@ -101,5 +101,35 @@ test('a source checkout launches through its own tsx', () => {
     assert.equal(spec.env.TSX_TSCONFIG_PATH, join('/opt/dsh-checkout', 'tsconfig.json'))
   } finally {
     delete process.env.DSHO_DSH_REPO
+  }
+})
+
+test('credentialEnv passes stored provider keys to workers, the environment wins', () => {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsho-creds-'))
+  writeFileSync(
+    join(dshHome, '.credentials.yaml'),
+    'version: 1\nrecords: {}\nrefs:\n  DEEPSEEK_API_KEY: test-not-a-real-key\n  OPENROUTER_API_KEY: test-stored-key\n  not-an-env-name: x\n',
+  )
+  process.env.DSH_HOME = dshHome
+  process.env.OPENROUTER_API_KEY = 'test-from-env'
+  process.env.DSHO_DSH_BIN = '/usr/bin/true'
+  try {
+    assert.deepEqual(credentialEnv(), { DEEPSEEK_API_KEY: 'test-not-a-real-key' })
+    const spec = spawnSpec({ jobDir: mkdtempSync(join(tmpdir(), 'dsho-job-')) })
+    assert.equal(spec.env.DEEPSEEK_API_KEY, 'test-not-a-real-key')
+    assert.equal(spec.env.OPENROUTER_API_KEY, 'test-from-env')
+  } finally {
+    delete process.env.DSH_HOME
+    delete process.env.OPENROUTER_API_KEY
+    delete process.env.DSHO_DSH_BIN
+  }
+})
+
+test('credentialEnv is empty without a credentials file', () => {
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsho-creds-'))
+  try {
+    assert.deepEqual(credentialEnv(), {})
+  } finally {
+    delete process.env.DSH_HOME
   }
 })

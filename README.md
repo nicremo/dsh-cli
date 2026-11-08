@@ -154,6 +154,8 @@ Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho se
 - A curated skill folder (`~/.dsh/skills-orchestra`, symlinks into `~/.agents/skills`) instead of your whole skill pool, which keeps the worker prompt about a third smaller. `--skills a,b,c` picks others, `--skills all` keeps dsh defaults.
 - `.dsho-workspace` as an extra project root marker, so workers in batch subfolders still load the workspace `AGENTS.md`.
 
+Headless dsh reads provider keys (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, ...) only from the environment. Keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` are therefore passed to each worker process; variables that are already set win, and no value is ever printed.
+
 ## Configuration
 
 `dsho config set <key> <value>` stores settings in `~/.dsho/config.json`. Environment variables win over the file.
