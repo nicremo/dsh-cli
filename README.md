@@ -151,6 +151,7 @@ When the web UI is reachable, dsh-cli talks to its HTTP API (`POST /api/<namespa
 Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho setup` builds that profile from the shipped headless template plus:
 
 - MCP servers copied from another profile (default `web`): `--mcp research` (firecrawl, Brave, context7, Exa, Tavily, Perplexity, Jina and similar; default), `all`, `none` or a comma list of ids. Copied rows can contain API keys, so the profile file is written with mode 0600 and nothing is printed.
+- The model provider settings of the same profile (`llm-pi-ai` with its provider routes, `agent-default-model`), so workers reach the models you configured in the app, for example through OpenRouter. `--no-llm` keeps the template's settings.
 - A curated skill folder (`~/.dsh/skills-orchestra`, symlinks into `~/.agents/skills`) instead of your whole skill pool, which keeps the worker prompt about a third smaller. `--skills a,b,c` picks others, `--skills all` keeps dsh defaults.
 - `.dsho-workspace` as an extra project root marker, so workers in batch subfolders still load the workspace `AGENTS.md`.
 

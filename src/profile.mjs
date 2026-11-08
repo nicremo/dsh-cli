@@ -39,8 +39,13 @@ export function mcpFilter(mode = 'research') {
   return (row) => wanted.has(row.id) || wanted.has(row.config?.serverName)
 }
 
-/** Schema that round-trips dsh's `!!js` expression scalars unchanged. */
+/**
+ * Schema that round-trips dsh's `!!js` expression scalars unchanged. Memoized: loading and
+ * dumping must share one JsExpr class, or copied `!!js` values would dump as plain objects.
+ */
+let jsSchema
 function schemaWithJs() {
+  if (jsSchema) return jsSchema
   class JsExpr {
     constructor(src) {
       this.src = src
@@ -52,7 +57,7 @@ function schemaWithJs() {
     instanceOf: JsExpr,
     represent: (obj) => obj.src,
   })
-  return yaml.DEFAULT_SCHEMA.extend([jsType])
+  return (jsSchema = yaml.DEFAULT_SCHEMA.extend([jsType]))
 }
 
 /** MCP client insert rows of a dsh patch file that pass `filter`. Values are never printed. */
@@ -66,14 +71,23 @@ export function extractRows(patchText, filter) {
   return { rows, dump: (value) => yaml.dump(value, { schema, lineWidth: -1, noRefs: true }) }
 }
 
-export function renderPatch({ rows, dump, skillsDir, sourceProfile }) {
+/** Model provider entries (e.g. OpenRouter through llm-pi-ai) that workers need to reach the same models. */
+export const LLM_ENTRIES = ['llm-pi-ai', 'agent-default-model']
+
+/** Top-level patch entries with one of the given ids. Values are never printed. */
+export function extractEntries(patchText, ids) {
+  const doc = yaml.load(patchText, { schema: schemaWithJs() }) ?? []
+  return (Array.isArray(doc) ? doc : []).filter((entry) => ids.includes(entry?.id) && entry.config)
+}
+
+export function renderPatch({ rows, dump, skillsDir, sourceProfile, entries = [] }) {
   const header = `# Managed by dsh-cli (dsho setup). The next \`dsho setup\` overwrites this file.
-# MCP rows are copied from the "${sourceProfile}" profile.
+# MCP rows${entries.length ? ` and model provider settings (${entries.map((e) => e.id).join(', ')})` : ''} are copied from the "${sourceProfile}" profile.
 #
 # A curated skill folder instead of the full pool keeps the worker prompt small;
 # the .dsho-workspace marker lets workers in batch subfolders load the workspace AGENTS.md.
 `
-  const base = []
+  const base = [...entries]
   if (skillsDir) base.push({ id: 'skill-filesystem', config: { includeDefaultRoots: false, customSkillDirs: [skillsDir], watch: false } })
   base.push({ id: 'agent-instructions', config: { maxBytes: 65536, projectRootMarkers: ['.git', '.dsho-workspace'] } })
   if (rows.length) base.push({ insert: rows })
@@ -109,7 +123,7 @@ const tail = (text) => (text || '').split('\n').filter(Boolean).slice(-3).join('
  * @param options.from - profile whose MCP rows are copied (default web).
  * @param options.skills - comma list of skills, "all" for the full pool, or undefined for the curated set.
  */
-export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
+export function setupProfile({ mcp = 'research', from = 'web', skills, llm = true } = {}) {
   const dir = profileDir()
   const notes = []
   mkdirSync(home(), { recursive: true })
@@ -130,16 +144,19 @@ export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
 
   const sourcePatch = join(profileDir(from), 'cordis.patch.yml')
   let rows = []
+  let entries = []
   let dump
   if (existsSync(sourcePatch)) {
-    ;({ rows, dump } = extractRows(readFileSync(sourcePatch, 'utf8'), mcpFilter(mcp)))
+    const text = readFileSync(sourcePatch, 'utf8')
+    ;({ rows, dump } = extractRows(text, mcpFilter(mcp)))
     if (!rows.length && mcp !== 'none') notes.push(`no matching MCP servers in the "${from}" profile; workers use the built-in web_search and web_fetch`)
+    if (llm) entries = extractEntries(text, LLM_ENTRIES)
   } else {
     ;({ dump } = extractRows('[]', () => false))
     if (mcp !== 'none') notes.push(`profile "${from}" has no cordis.patch.yml; no MCP servers copied`)
   }
   const patchFile = join(dir, 'cordis.patch.yml')
-  writeFileSync(patchFile, renderPatch({ rows, dump, skillsDir, sourceProfile: from }), { mode: 0o600 })
+  writeFileSync(patchFile, renderPatch({ rows, dump, skillsDir, sourceProfile: from, entries }), { mode: 0o600 })
   // Copied MCP rows can carry API keys, so the file stays private.
   chmodSync(patchFile, 0o600)
 
@@ -151,6 +168,7 @@ export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
     profile: PROFILE,
     profileDir: dir,
     mcpServers: rows.map((r) => r.config?.serverName ?? r.id),
+    llm: entries.map((e) => (e.id === 'agent-default-model' ? `${e.config.provider}/${e.config.model}` : e.id)),
     skillsDir,
     skills: linked,
     notes,

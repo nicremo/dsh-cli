@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractRows, mcpFilter, renderPatch } from '../src/profile.mjs'
+import { extractEntries, extractRows, LLM_ENTRIES, mcpFilter, renderPatch } from '../src/profile.mjs'
 
 const MCP = "'@deepseek-ai/dsh-mcp-client'"
 const WEB_PATCH = `# fixture with fake values only
@@ -66,4 +66,39 @@ test('!!js scalars survive a copy unchanged', () => {
   const text = dump([{ insert: rows }])
   assert.match(text, /!!js .*Bearer/)
   assert.doesNotMatch(text, /\[object Object\]/)
+})
+
+const LLM_PATCH = `# fixture with fake values only
+- id: ui-settings-general
+  config:
+    theme: dark
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+        baseUrl: !!js "process.env.OPENROUTER_BASE ?? 'https://openrouter.ai/api/v1'"
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: openrouter
+    model: ~deepseek/deepseek-v4-flash-latest
+`
+
+test('extractEntries picks the model provider entries only', () => {
+  assert.deepEqual(extractEntries(LLM_PATCH, LLM_ENTRIES).map((e) => e.id), ['llm-pi-ai', 'agent-default-model'])
+  assert.deepEqual(extractEntries('[]', LLM_ENTRIES), [])
+})
+
+test('renderPatch carries copied model entries, !!js included', () => {
+  const entries = extractEntries(LLM_PATCH, LLM_ENTRIES)
+  const { rows, dump } = extractRows(WEB_PATCH, mcpFilter('research'))
+  const text = renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web', entries })
+  assert.match(text, /model provider settings \(llm-pi-ai, agent-default-model\)/)
+  assert.match(text, /provider: openrouter/)
+  assert.match(text, /!!js .*OPENROUTER_BASE/)
+  assert.doesNotMatch(text, /\[object Object\]|src:/)
+  assert.equal(extractEntries(text, LLM_ENTRIES).length, 2)
+  assert.equal(extractRows(text, mcpFilter('all')).rows.length, 2)
 })
