@@ -57,7 +57,7 @@ flowchart LR
 - Node.js `>=22.19`
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), installed with `npm install -g @deepseek-ai/dsh` (or a source checkout), logged in once
 - Optional, for `dsho capture`: Python 3 with Playwright (`pip install playwright && python3 -m playwright install chromium`) and ffmpeg
-- macOS or Linux
+- macOS, Linux or Windows. On Windows, `dshBin` may point at a `.cmd` shim: npm's `dsh.cmd` or the CLI bundled with the DeepSeek Harness desktop app (`%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`). dsh-cli reads the shim and starts its script directly, since Node cannot spawn `.cmd` files without a shell.
 
 ## Install
 

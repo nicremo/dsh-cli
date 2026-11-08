@@ -75,7 +75,8 @@ export function installSkill({ agents, copy = false } = {}) {
       cpSync(canonical, target, { recursive: true })
       rows.push({ agent: t.agent, path: target, action: 'copied' })
     } else {
-      symlinkSync(canonical, target)
+      // Junctions need no admin rights or developer mode on Windows; other systems ignore the type.
+      symlinkSync(canonical, target, 'junction')
       rows.push({ agent: t.agent, path: target, action: 'linked' })
     }
   }

@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Windows: `dshBin` can be a `.cmd` shim (npm or the DeepSeek Harness desktop app); `which` tries `.exe`/`.cmd`/`.bat`; workers run without console windows; `cancel` ends the whole process tree; skills are linked with junctions, which need no admin rights.
+- Tests run on Windows (no hard-coded `/` paths, CRLF checkouts, isolated home directory).
+
 ## [0.1.0] - 2026-10-07
 
 ### Added

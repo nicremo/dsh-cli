@@ -1,6 +1,6 @@
 // Runs one job: spawns headless dsh in the job's workspace, streams the event
 // log to disk, keeps job.json current and maps the outcome to a status.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,11 @@ export function readTask(id) {
 
 function killGroup(pid, signal) {
   if (!pid) return
+  if (process.platform === 'win32') {
+    // No process groups on Windows: end the whole tree (dsh starts its own children).
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    return
+  }
   try {
     process.kill(-pid, signal)
   } catch {
@@ -102,6 +107,7 @@ async function runHeadless(id) {
     env: spec.env,
     stdio: ['pipe', 'pipe', errFd],
     detached: true,
+    windowsHide: true,
   })
   closeSync(errFd)
   activeChildren.set(id, child)
@@ -367,6 +373,7 @@ export function spawnDetached(args) {
     stdio: ['ignore', log, log],
     env: process.env,
     cwd: home(),
+    windowsHide: true,
   })
   closeSync(log)
   child.unref()

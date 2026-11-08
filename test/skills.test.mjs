@@ -8,6 +8,7 @@ let home
 before(() => {
   home = mkdtempSync(join(tmpdir(), 'dsho-skill-'))
   process.env.HOME = home
+  process.env.USERPROFILE = home // os.homedir() reads USERPROFILE on Windows, not HOME
   delete process.env.CLAUDE_CONFIG_DIR
   delete process.env.CODEX_HOME
   delete process.env.DSH_AGENTS_HOME
@@ -21,7 +22,7 @@ test('installs the canonical copy and links detected agents', () => {
   const res = installSkill({})
   const canonical = join(home, '.agents', 'skills', 'dsh-orchestration')
   assert.equal(res.canonical, canonical)
-  assert.match(readFileSync(join(canonical, 'SKILL.md'), 'utf8'), /^---\nname: dsh-orchestration/)
+  assert.match(readFileSync(join(canonical, 'SKILL.md'), 'utf8'), /^---\r?\nname: dsh-orchestration/)
   assert.ok(lstatSync(join(home, '.claude', 'skills', 'dsh-orchestration')).isSymbolicLink())
   assert.ok(lstatSync(join(home, '.codex', 'skills', 'dsh-orchestration')).isSymbolicLink())
   assert.ok(!existsSync(join(home, '.pi')))

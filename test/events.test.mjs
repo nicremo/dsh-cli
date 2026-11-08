@@ -97,8 +97,8 @@ test('a source checkout launches through its own tsx', () => {
     assert.equal(spec.cmd, process.execPath)
     assert.equal(spec.args[0], '--import')
     assert.match(spec.args[1], /tsx\/dist\/esm\/index\.mjs$/)
-    assert.equal(spec.args[2], '/opt/dsh-checkout/apps/cli/src/bin.ts')
-    assert.equal(spec.env.TSX_TSCONFIG_PATH, '/opt/dsh-checkout/tsconfig.json')
+    assert.equal(spec.args[2], join('/opt/dsh-checkout', 'apps', 'cli', 'src', 'bin.ts'))
+    assert.equal(spec.env.TSX_TSCONFIG_PATH, join('/opt/dsh-checkout', 'tsconfig.json'))
   } finally {
     delete process.env.DSHO_DSH_REPO
   }

@@ -95,7 +95,7 @@ function linkSkills(names) {
     } catch {
       // Missing link.
     }
-    if (!present) symlinkSync(source, target)
+    if (!present) symlinkSync(source, target, 'junction') // Windows: no admin rights needed
     linked.push(name)
   }
   return { dir, linked }

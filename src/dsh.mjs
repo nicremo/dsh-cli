@@ -10,7 +10,7 @@
 // without it tsx resolves stale lib/ builds whenever the cwd is outside the repo.
 import { accessSync, constants, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import yaml from 'js-yaml'
 import { cfg } from './config.mjs'
@@ -31,19 +31,48 @@ export function resolveModel(model) {
   return MODEL_ALIASES[model] ?? model
 }
 
-/** First executable named `name` on PATH, or null. */
+/** First executable named `name` on PATH, or null. On Windows also tries the PATHEXT extensions. */
 export function which(name) {
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     if (!dir) continue
-    const candidate = join(dir, name)
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch {
-      // Not in this PATH entry.
+    for (const ext of exts) {
+      const candidate = join(dir, name + ext)
+      try {
+        accessSync(candidate, constants.X_OK)
+        return candidate
+      } catch {
+        // Not in this PATH entry.
+      }
     }
   }
   return null
+}
+
+/**
+ * Windows: Node refuses to spawn .cmd/.bat files without a shell (CVE-2024-27980), and a
+ * shell would re-parse every argument. Read the shim instead and launch its script directly.
+ * Handles npm shims (`"%_prog%" "%dp0%\node_modules\...\bin.js" %*`) and the DeepSeek Harness
+ * desktop shim (`"%~dp0..\DeepSeek Harness.exe" --expose-internals "%~dp0..\cli.js" %*`
+ * with ELECTRON_RUN_AS_NODE=1). Returns null when the shim has an unknown shape.
+ */
+export function resolveCmdShim(file) {
+  const dir = dirname(file)
+  const text = readFileSync(file, 'utf8')
+  // Backslashes become the platform separator, so the parser is testable on every OS
+  const expand = (s) => resolve(s.replace(/%~dp0|%dp0%/gi, dir + sep).replace(/\\/g, sep))
+  const line = text.split(/\r?\n/).find((l) => /\.[cm]?js"/i.test(l))
+  if (!line) return null
+  const quoted = [...line.matchAll(/"([^"]+)"/g)].map((m) => ({ value: m[1], index: m.index }))
+  const script = quoted.find((q) => /\.[cm]?js$/i.test(q.value))
+  if (!script) return null
+  const exe = quoted.find((q) => q.index < script.index && /\.exe$/i.test(q.value) && existsSync(expand(q.value)))
+  const flags = exe ? line.slice(exe.index + exe.value.length + 2, script.index).match(/--[\w-]+/g) ?? [] : []
+  return {
+    cmd: exe ? expand(exe.value) : process.execPath,
+    prefix: [...flags, expand(script.value)],
+    env: /ELECTRON_RUN_AS_NODE=1/i.test(text) ? { ELECTRON_RUN_AS_NODE: '1' } : {},
+  }
 }
 
 function sourceLaunch(repo) {
@@ -60,10 +89,19 @@ const isCheckout = (repo) => existsSync(join(repo, 'apps', 'cli', 'src', 'bin.ts
 
 /** How to start dsh on this machine, or null when it is not installed. */
 export function resolveDsh() {
-  if (process.env.DSHO_DSH_CMD) return { kind: 'custom', where: process.env.DSHO_DSH_CMD, cmd: process.env.DSHO_DSH_CMD, prefix: [], env: {} }
+  if (process.env.DSHO_DSH_CMD) {
+    // Scripts go through node: Windows cannot execute a .mjs file directly.
+    const custom = process.env.DSHO_DSH_CMD
+    const script = /\.[cm]?js$/i.test(custom)
+    return { kind: 'custom', where: custom, cmd: script ? process.execPath : custom, prefix: script ? [custom] : [], env: {} }
+  }
   const repo = cfg('dshRepo')
   if (repo) return sourceLaunch(repo)
   const bin = cfg('dshBin') || which('dsh')
+  if (bin && process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
+    const shim = resolveCmdShim(bin)
+    if (shim) return { kind: 'binary', where: bin, ...shim }
+  }
   if (bin) return { kind: 'binary', where: bin, cmd: bin, prefix: [], env: {} }
   const fallback = join(homedir(), 'deepseek-harness')
   if (isCheckout(fallback)) return sourceLaunch(fallback)
@@ -122,7 +160,7 @@ function writeSettingsOverride(jobDir, { model, effort }) {
 export function spawnSpec({ sessionId, model, effort, jobDir }) {
   const tail = ['--json', ...(sessionId ? ['--session-id', sessionId] : []), '-']
   const dsh = requireDsh()
-  if (dsh.kind === 'custom') return { cmd: dsh.cmd, args: tail, env: { ...process.env }, profile: 'custom' }
+  if (dsh.kind === 'custom') return { cmd: dsh.cmd, args: [...dsh.prefix, ...tail], env: { ...process.env }, profile: 'custom' }
   const profile = activeProfile()
   const args = [...dsh.prefix, '--profile', profile]
   if (model || effort) args.push('--patch', writeSettingsOverride(jobDir, { model, effort }))
