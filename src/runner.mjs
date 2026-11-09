@@ -1,10 +1,11 @@
 // Runs one job: spawns headless dsh in the job's workspace, streams the event
 // log to disk, keeps job.json current and maps the outcome to a status.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readDshSettings, resolveModel, spawnSpec } from './dsh.mjs'
+import { cfg } from './config.mjs'
+import { modelSelection, spawnSpec } from './dsh.mjs'
 import { fold, initialState } from './events.mjs'
 import { home, jobDir, logsDir } from './paths.mjs'
 import { createJob, readJobRaw, TERMINAL, updateJob } from './store.mjs'
@@ -36,6 +37,13 @@ export function readTask(id) {
 
 function killGroup(pid, signal) {
   if (!pid) return
+  if (process.platform === 'win32') {
+    // No process groups on Windows: end the whole tree (dsh starts its own children).
+    // Absolute path: a bare name would also be looked up in the cwd, which may be a workspace.
+    const taskkill = join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'taskkill.exe')
+    spawnSync(taskkill, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    return
+  }
   try {
     process.kill(-pid, signal)
   } catch {
@@ -102,6 +110,7 @@ async function runHeadless(id) {
     env: spec.env,
     stdio: ['pipe', 'pipe', errFd],
     detached: true,
+    windowsHide: true,
   })
   closeSync(errFd)
   activeChildren.set(id, child)
@@ -152,16 +161,21 @@ async function runHeadless(id) {
   child.stdin.on('error', () => {})
   child.stdin.end(readTask(id))
 
+  // Once the child has exited its PID may belong to another process: never signal it again
+  const exited = () => child.exitCode !== null || child.signalCode !== null
+  const escalate = () => {
+    if (!exited()) killGroup(child.pid, 'SIGKILL')
+  }
   const timeoutMs = (job.timeoutSec ?? 1800) * 1000
   const timer = setTimeout(() => {
     timedOut = true
     killGroup(child.pid, 'SIGTERM')
-    setTimeout(() => killGroup(child.pid, 'SIGKILL'), KILL_GRACE_MS).unref()
+    setTimeout(escalate, KILL_GRACE_MS).unref()
   }, timeoutMs)
   const cancelPoll = setInterval(() => {
-    if (existsSync(cancelMarker(id))) {
+    if (existsSync(cancelMarker(id)) && !exited()) {
       killGroup(child.pid, 'SIGTERM')
-      setTimeout(() => killGroup(child.pid, 'SIGKILL'), KILL_GRACE_MS).unref()
+      setTimeout(escalate, KILL_GRACE_MS).unref()
     }
   }, 500)
 
@@ -273,14 +287,8 @@ async function runWeb(id) {
     } else {
       updateJob(id, { sessionId, web: { baseUrl: web.baseUrl(), ...(job.web ?? {}) } })
     }
-    if (job.model || job.effort) {
-      const current = readDshSettings()['agent-default-model'] ?? {}
-      const reasoningEffort = job.effort ?? current.reasoningEffort
-      await web.selectModel(sessionId, {
-        provider: current.provider ?? 'deepseek-official',
-        model: resolveModel(job.model) ?? current.model ?? 'deepseek-flash',
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-      })
+    if (job.model || job.effort || cfg('provider') || cfg('model')) {
+      await web.selectModel(sessionId, modelSelection({ model: job.model, effort: job.effort }))
     }
     record([{ type: 'session', sessionId, cwd: job.cwd }])
     let lastSeq = await web.cursor(sessionId)
@@ -367,6 +375,7 @@ export function spawnDetached(args) {
     stdio: ['ignore', log, log],
     env: process.env,
     cwd: home(),
+    windowsHide: true,
   })
   closeSync(log)
   child.unref()

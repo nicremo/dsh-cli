@@ -12,6 +12,8 @@ export const CONFIG_KEYS = {
   backend: { env: 'DSHO_BACKEND', help: 'auto | web | headless' },
   workspaces: { env: 'DSHO_WORKSPACES', help: 'root folder for new workspaces (default ~/dsh-workspaces)' },
   python: { env: 'DSHO_PYTHON', help: 'python with playwright for dsho capture' },
+  provider: { env: 'DSHO_PROVIDER', help: 'model provider route for workers, e.g. openrouter (default: dsh settings, else deepseek-official)' },
+  model: { env: 'DSHO_MODEL', help: 'default model for jobs without -m, e.g. v4-flash' },
 }
 
 const file = () => join(home(), 'config.json')

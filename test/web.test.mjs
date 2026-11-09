@@ -77,9 +77,10 @@ test('a web batch becomes one workspace with one session per job', async () => {
   assert.equal(wsRow.sessionIds.length, 2)
   for (const job of r.json.jobs) {
     assert.equal(job.cwd, root)
-    assert.ok(job.outDir.startsWith(root + '/0'))
+    assert.ok(job.outDir.startsWith(join(root, '0')))
     assert.match(fake.sessions.get(job.sessionId).title, /^0\d · Research: Question/)
-    assert.match(readFileSync(join(env.DSHO_HOME, 'jobs', job.id, 'task.md'), 'utf8'), new RegExp(`^Working folder for this task: ${job.outDir}`))
+    // startsWith instead of a RegExp: Windows paths contain backslashes
+    assert.ok(readFileSync(join(env.DSHO_HOME, 'jobs', job.id, 'task.md'), 'utf8').startsWith(`Working folder for this task: ${job.outDir}`))
   }
 })
 

@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fold, initialState, parseLines, timeline } from '../src/events.mjs'
-import { resolveModel, spawnSpec } from '../src/dsh.mjs'
+import { credentialEnv, modelSelection, resolveModel, spawnSpec } from '../src/dsh.mjs'
 
 // Keep the user's ~/.dsho/config.json out of these tests.
 process.env.DSHO_HOME = mkdtempSync(join(tmpdir(), 'dsho-events-'))
@@ -97,9 +97,80 @@ test('a source checkout launches through its own tsx', () => {
     assert.equal(spec.cmd, process.execPath)
     assert.equal(spec.args[0], '--import')
     assert.match(spec.args[1], /tsx\/dist\/esm\/index\.mjs$/)
-    assert.equal(spec.args[2], '/opt/dsh-checkout/apps/cli/src/bin.ts')
-    assert.equal(spec.env.TSX_TSCONFIG_PATH, '/opt/dsh-checkout/tsconfig.json')
+    assert.equal(spec.args[2], join('/opt/dsh-checkout', 'apps', 'cli', 'src', 'bin.ts'))
+    assert.equal(spec.env.TSX_TSCONFIG_PATH, join('/opt/dsh-checkout', 'tsconfig.json'))
   } finally {
     delete process.env.DSHO_DSH_REPO
+  }
+})
+
+test('credentialEnv passes stored provider keys to workers, the environment wins', () => {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsho-creds-'))
+  writeFileSync(
+    join(dshHome, '.credentials.yaml'),
+    'version: 1\nrecords: {}\nrefs:\n  DEEPSEEK_API_KEY: test-not-a-real-key\n  OPENROUTER_API_KEY: test-stored-key\n  not-an-env-name: x\n',
+  )
+  // Users of this CLI often export these keys; the test must not depend on them
+  const saved = { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY }
+  delete process.env.DEEPSEEK_API_KEY
+  process.env.DSH_HOME = dshHome
+  process.env.OPENROUTER_API_KEY = 'test-from-env'
+  process.env.DSHO_DSH_BIN = '/usr/bin/true'
+  try {
+    assert.deepEqual(credentialEnv(), { DEEPSEEK_API_KEY: 'test-not-a-real-key' })
+    const spec = spawnSpec({ jobDir: mkdtempSync(join(tmpdir(), 'dsho-job-')) })
+    assert.equal(spec.env.DEEPSEEK_API_KEY, 'test-not-a-real-key')
+    assert.equal(spec.env.OPENROUTER_API_KEY, 'test-from-env')
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    delete process.env.DSH_HOME
+    delete process.env.DSHO_DSH_BIN
+  }
+})
+
+test('credentialEnv is empty without a credentials file', () => {
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsho-creds-'))
+  try {
+    assert.deepEqual(credentialEnv(), {})
+  } finally {
+    delete process.env.DSH_HOME
+  }
+})
+
+test('resolveModel maps aliases to OpenRouter catalog ids', () => {
+  assert.equal(resolveModel('v4-flash', 'openrouter'), 'deepseek/deepseek-v4-flash')
+  assert.equal(resolveModel('pro', 'openrouter'), 'deepseek/deepseek-v4-pro')
+  assert.equal(resolveModel('flash', 'openrouter'), '~deepseek/deepseek-flash-latest')
+  assert.equal(resolveModel('deepseek/deepseek-v3.2', 'openrouter'), 'deepseek/deepseek-v3.2')
+  assert.equal(resolveModel('vision', 'openrouter'), 'deepseek/deepseek-v4-flash-vision-exp')
+  assert.equal(resolveModel('v4-flash', 'deepseek-official'), 'deepseek-v4-flash')
+})
+
+test('resolveModel leaves models of other vendors alone', () => {
+  assert.equal(resolveModel('kimi-k2', 'openrouter'), 'kimi-k2')
+  assert.equal(resolveModel('moonshotai/kimi-k2', 'openrouter'), 'moonshotai/kimi-k2')
+})
+
+test('provider and model settings drive the per-job settings, -m still wins', () => {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsho-dshhome-'))
+  const jobDir = mkdtempSync(join(tmpdir(), 'dsho-job-'))
+  process.env.DSH_HOME = dshHome
+  process.env.DSHO_DSH_BIN = '/usr/bin/true'
+  process.env.DSHO_PROVIDER = 'openrouter'
+  process.env.DSHO_MODEL = 'v4-flash'
+  try {
+    const spec = spawnSpec({ jobDir })
+    assert.ok(spec.args.includes('--patch'), 'a configured provider writes the override without -m')
+    const settings = JSON.parse(readFileSync(join(jobDir, 'settings.yaml'), 'utf8'))
+    assert.deepEqual(settings['agent-default-model'], { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' })
+    assert.equal(modelSelection({ model: 'pro' }, {}).model, 'deepseek/deepseek-v4-pro')
+  } finally {
+    delete process.env.DSH_HOME
+    delete process.env.DSHO_DSH_BIN
+    delete process.env.DSHO_PROVIDER
+    delete process.env.DSHO_MODEL
   }
 })
