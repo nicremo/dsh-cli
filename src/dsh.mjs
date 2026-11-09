@@ -32,7 +32,8 @@ const VENDOR_PREFIXED = new Set(['openrouter'])
 export function resolveModel(model, provider) {
   if (!model) return null
   const id = MODEL_ALIASES[model] ?? model
-  if (!VENDOR_PREFIXED.has(provider) || id.includes('/')) return id
+  // Only DeepSeek ids get the vendor prefix; full ids and other vendors' models pass through
+  if (!VENDOR_PREFIXED.has(provider) || id.includes('/') || !id.startsWith('deepseek-')) return id
   // The rolling aliases are "~deepseek/deepseek-flash-latest" there, versioned models "deepseek/<id>"
   return /^deepseek-(flash|pro)$/.test(id) ? `~deepseek/${id}-latest` : `deepseek/${id}`
 }

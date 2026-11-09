@@ -1,6 +1,7 @@
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -45,4 +46,22 @@ test('a foreign skill with the same name is left alone', () => {
   const res = installSkill({ agents: ['codex'] })
   assert.match(res.rows[1].action, /skipped/)
   assert.equal(readFileSync(join(foreign, 'SKILL.md'), 'utf8'), 'mine')
+})
+
+test('copies when Windows cannot create a junction (network share)', { skip: process.platform !== 'win32' && 'Windows only' }, (t) => {
+  // Junctions only reach local volumes; simulate the refusal for a canonical copy on a share
+  t.mock.method(fs, 'symlinkSync', () => {
+    throw Object.assign(new Error('Local volumes are required'), { code: 'EPERM' })
+  })
+  syncBuiltinESMExports()
+  try {
+    const res = installSkill({ agents: ['claude'] })
+    const target = join(home, '.claude', 'skills', 'dsh-orchestration')
+    assert.ok(!lstatSync(target).isSymbolicLink())
+    assert.ok(existsSync(join(target, 'SKILL.md')))
+    assert.equal(res.rows[1].action, 'copied')
+  } finally {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
 })

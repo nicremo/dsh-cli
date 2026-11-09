@@ -56,13 +56,15 @@ test('resolveCmdShim returns null for an unknown shim', () => {
 })
 
 test('DSHO_DSH_CMD may be a script that runs through node', () => {
+  const previous = process.env.DSHO_DSH_CMD
   process.env.DSHO_DSH_CMD = join(tmpdir(), 'fake-dsh.mjs')
   try {
     const spec = spawnSpec({ sessionId: 'session-1', jobDir: tmpdir() })
     assert.equal(spec.cmd, process.execPath)
     assert.deepEqual(spec.args, [process.env.DSHO_DSH_CMD, '--json', '--session-id', 'session-1', '-'])
   } finally {
-    delete process.env.DSHO_DSH_CMD
+    if (previous === undefined) delete process.env.DSHO_DSH_CMD
+    else process.env.DSHO_DSH_CMD = previous
   }
 })
 
@@ -73,6 +75,19 @@ test('which finds .cmd shims through PATHEXT on Windows', { skip: process.platfo
   process.env.PATH = dir
   try {
     assert.equal(which('dsh'), join(dir, 'dsh.cmd'))
+  } finally {
+    process.env.PATH = path
+  }
+})
+
+test('which prefers .exe over .cmd on Windows', { skip: process.platform !== 'win32' && 'Windows only' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsho-path-'))
+  writeFileSync(join(dir, 'dsh.cmd'), NPM_SHIM)
+  writeFileSync(join(dir, 'dsh.exe'), '')
+  const path = process.env.PATH
+  process.env.PATH = dir
+  try {
+    assert.equal(which('dsh'), join(dir, 'dsh.exe'))
   } finally {
     process.env.PATH = path
   }

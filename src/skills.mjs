@@ -71,14 +71,29 @@ export function installSkill({ agents, copy = false } = {}) {
     if (existing === 'link') rmSync(target)
     if (existing === 'ours') rmSync(target, { recursive: true, force: true })
     mkdirSync(t.dir, { recursive: true })
-    if (copy) {
+    if (copy || !linkSkill(canonical, target)) {
       cpSync(canonical, target, { recursive: true })
       rows.push({ agent: t.agent, path: target, action: 'copied' })
     } else {
-      // Junctions need no admin rights or developer mode on Windows; other systems ignore the type.
-      symlinkSync(canonical, target, 'junction')
       rows.push({ agent: t.agent, path: target, action: 'linked' })
     }
   }
   return { canonical, rows }
+}
+
+/**
+ * Link `target` to `canonical`; false when Windows cannot link it there.
+ * Junctions need no admin rights or developer mode on Windows (other systems ignore the type),
+ * but they only reach local volumes: a canonical copy on a network share needs a copy instead.
+ */
+function linkSkill(canonical, target) {
+  try {
+    symlinkSync(canonical, target, 'junction')
+  } catch (err) {
+    if (process.platform !== 'win32') throw err
+    return false
+  }
+  if (existsSync(join(target, 'SKILL.md'))) return true
+  rmSync(target)
+  return false
 }

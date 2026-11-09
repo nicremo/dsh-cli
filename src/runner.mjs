@@ -39,7 +39,9 @@ function killGroup(pid, signal) {
   if (!pid) return
   if (process.platform === 'win32') {
     // No process groups on Windows: end the whole tree (dsh starts its own children).
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    // Absolute path: a bare name would also be looked up in the cwd, which may be a workspace.
+    const taskkill = join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'taskkill.exe')
+    spawnSync(taskkill, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
     return
   }
   try {
@@ -159,16 +161,21 @@ async function runHeadless(id) {
   child.stdin.on('error', () => {})
   child.stdin.end(readTask(id))
 
+  // Once the child has exited its PID may belong to another process: never signal it again
+  const exited = () => child.exitCode !== null || child.signalCode !== null
+  const escalate = () => {
+    if (!exited()) killGroup(child.pid, 'SIGKILL')
+  }
   const timeoutMs = (job.timeoutSec ?? 1800) * 1000
   const timer = setTimeout(() => {
     timedOut = true
     killGroup(child.pid, 'SIGTERM')
-    setTimeout(() => killGroup(child.pid, 'SIGKILL'), KILL_GRACE_MS).unref()
+    setTimeout(escalate, KILL_GRACE_MS).unref()
   }, timeoutMs)
   const cancelPoll = setInterval(() => {
-    if (existsSync(cancelMarker(id))) {
+    if (existsSync(cancelMarker(id)) && !exited()) {
       killGroup(child.pid, 'SIGTERM')
-      setTimeout(() => killGroup(child.pid, 'SIGKILL'), KILL_GRACE_MS).unref()
+      setTimeout(escalate, KILL_GRACE_MS).unref()
     }
   }, 500)
 

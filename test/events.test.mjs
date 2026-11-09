@@ -110,6 +110,9 @@ test('credentialEnv passes stored provider keys to workers, the environment wins
     join(dshHome, '.credentials.yaml'),
     'version: 1\nrecords: {}\nrefs:\n  DEEPSEEK_API_KEY: test-not-a-real-key\n  OPENROUTER_API_KEY: test-stored-key\n  not-an-env-name: x\n',
   )
+  // Users of this CLI often export these keys; the test must not depend on them
+  const saved = { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY }
+  delete process.env.DEEPSEEK_API_KEY
   process.env.DSH_HOME = dshHome
   process.env.OPENROUTER_API_KEY = 'test-from-env'
   process.env.DSHO_DSH_BIN = '/usr/bin/true'
@@ -119,8 +122,11 @@ test('credentialEnv passes stored provider keys to workers, the environment wins
     assert.equal(spec.env.DEEPSEEK_API_KEY, 'test-not-a-real-key')
     assert.equal(spec.env.OPENROUTER_API_KEY, 'test-from-env')
   } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
     delete process.env.DSH_HOME
-    delete process.env.OPENROUTER_API_KEY
     delete process.env.DSHO_DSH_BIN
   }
 })
@@ -139,7 +145,13 @@ test('resolveModel maps aliases to OpenRouter catalog ids', () => {
   assert.equal(resolveModel('pro', 'openrouter'), 'deepseek/deepseek-v4-pro')
   assert.equal(resolveModel('flash', 'openrouter'), '~deepseek/deepseek-flash-latest')
   assert.equal(resolveModel('deepseek/deepseek-v3.2', 'openrouter'), 'deepseek/deepseek-v3.2')
+  assert.equal(resolveModel('vision', 'openrouter'), 'deepseek/deepseek-v4-flash-vision-exp')
   assert.equal(resolveModel('v4-flash', 'deepseek-official'), 'deepseek-v4-flash')
+})
+
+test('resolveModel leaves models of other vendors alone', () => {
+  assert.equal(resolveModel('kimi-k2', 'openrouter'), 'kimi-k2')
+  assert.equal(resolveModel('moonshotai/kimi-k2', 'openrouter'), 'moonshotai/kimi-k2')
 })
 
 test('provider and model settings drive the per-job settings, -m still wins', () => {
