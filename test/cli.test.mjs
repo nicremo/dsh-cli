@@ -423,6 +423,12 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     await s.run(['continue', parent.id, '-w', '--json', 'Sandbox follow-up'])
     const follow = s.dshLog().find((e) => e.event === 'start' && e.task === 'Sandbox follow-up')
     assert.ok(follow.args.includes('danger-full-access'), follow.args.join(' '))
+    // continue --access changes the sandbox for the follow-up only.
+    const narrowed = await s.run(['continue', parent.id, '--access', 'read-only', '-w', '--json', 'Sandbox narrowed'])
+    assert.equal(narrowed.code, 0, narrowed.out + narrowed.err)
+    const narrow = s.dshLog().find((e) => e.event === 'start' && e.task === 'Sandbox narrowed')
+    assert.deepEqual(narrow.args.slice(narrow.args.indexOf('--permission-mode'), narrow.args.indexOf('--permission-mode') + 2), ['--permission-mode', 'read-only'])
+    assert.equal((await s.run(['continue', parent.id, '--access', 'root', 'x', '--json'])).code, 2)
   }))
 
   // ------------------------------------------------------ open issues ----

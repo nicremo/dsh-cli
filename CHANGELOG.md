@@ -7,12 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [0.2.0] - 2026-11-22
 
 Windows support and compatibility with DeepSeek Harness 0.2.2. Tested on Windows 11 with
-dsh 0.2.2-rc.5; CI covers Ubuntu, macOS and Windows on Node 22 and 24.
+dsh 0.2.2-rc.5 and real DeepSeek runs (headless and web UI, batches, cancel, continue, sandbox);
+CI covers Ubuntu, macOS and Windows on Node 22 and 24. The test suite was rewritten after a
+critical review: 104 tests through the CLI process, the dsh boundary and pure helpers.
 
 ### Added
 - Windows support (thanks to @apohl23-oss, #11): `dshBin` can be a `.cmd` shim (npm or the DeepSeek Harness desktop app); `which` tries `.exe`/`.cmd`/`.bat`; workers run without console windows; `cancel` ends the whole process tree through `System32\taskkill.exe`; skills are linked with junctions (no admin rights) and copied where a junction cannot reach. `dsho capture` stops hanging pages with `taskkill`, finds `python`/`py`, and prints UTF-8 on every console; `~\` paths expand like `~/`.
 - `--access read-only|workspace-write|full` (config key `access`) picks the dsh sandbox for headless workers. Workers always run with `--approval-policy never`, so they no longer stall on approval prompts: actions the sandbox forbids are rejected and the model is told so (#1).
 - An auto-selected web job falls back to headless when the DSH web UI fails before the task is sent.
+- `continue --access` changes the sandbox for a follow-up; without it the job's sandbox carries over.
+- `doctor` lists the names (never values) of the model API keys it finds, checks that the profile loads the credentials store, and on Windows warns when dsh was installed into an MSIX app's private storage (for example from inside the Claude desktop app).
 - `provider` and `model` config keys (`DSHO_PROVIDER`, `DSHO_MODEL`) for the provider route and the default model of every job, shared by the headless and web backends; with `openrouter`, short DeepSeek names map to `deepseek/<id>` catalog ids (#11).
 - `setup` copies the model provider settings (`llm-pi-ai`, `agent-default-model`) from the source profile into `orchestra`; `--no-llm` opts out (#11).
 - Headless workers receive provider keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` (the environment wins) (#11).
@@ -27,6 +31,10 @@ dsh 0.2.2-rc.5; CI covers Ubuntu, macOS and Windows on Node 22 and 24.
 - `setup --skills` removes links of an earlier selection from the curated skill folder (#8).
 - `last` picks the newest job also when several jobs were created in the same millisecond (#9).
 - `logs --stderr --json` prints a JSON object (#10).
+- Headless workers see the API key saved in the DSH UI: `setup` turns the credentials store back on, which dsh 0.2.2's headless template disables.
+- `capture scroll` scrolls again: unlocking modal scroll locks with `overflow: auto` on both `html` and `body` turned every scroll video into a still image.
+- Windows: concurrent rewrites of `job.json` by the launching command and the runner no longer fail with EPERM (jobs ended up `lost` or `queued` forever).
+- `wait --timeout 0` returns at once; `ws`, `skill` and `capture` without a subcommand print JSON with `--json`; `run -t` is validated before the workspace is created.
 - `ws init` no longer overwrites an existing `AGENTS.md` (#2).
 - Install instructions: the package is `@nicremo/dsh-cli` (npm rejects the unscoped name `dsh-cli`); `npm install -g github:nicremo/dsh-cli` installs the unreleased state (#4).
 - `npm test` runs on Windows (cmd.exe kept the single quotes of the test glob and ran no tests) (#11).

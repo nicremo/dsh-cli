@@ -413,8 +413,10 @@ ${BACKEND_HELP}`,
   Timeline of tool calls and answers. -f follows live until the job ends.`,
   files: `dsho files <ref> [--all]
   Files the job created or changed in its folder (--all: every file).`,
-  continue: `dsho continue <job> <follow-up...|-> [-w] [-t dur] [--max-wait dur]
-  Continues the job's dsh session with a follow-up task (same folder, same session).`,
+  continue: `dsho continue <job> <follow-up...|-> [-w] [-t dur] [--max-wait dur] [--access a]
+  Continues the job's dsh session with a follow-up task (same folder, same session).
+  The sandbox of the job carries over; --access read-only|workspace-write|full changes it
+  for the follow-up (headless jobs).`,
   cancel: `dsho cancel <ref>
   Cancels a job or every unfinished job of a batch.`,
   collect: `dsho collect <batch> [-o file]
@@ -753,8 +755,9 @@ async function cmdFiles(argv) {
 }
 
 async function cmdContinue(argv) {
-  const { values, positionals } = parse(argv, { wait: RUN_OPTS.wait, timeout: RUN_OPTS.timeout, 'max-wait': RUN_OPTS['max-wait'], file: { type: 'string', short: 'f' } })
+  const { values, positionals } = parse(argv, { wait: RUN_OPTS.wait, timeout: RUN_OPTS.timeout, 'max-wait': RUN_OPTS['max-wait'], access: RUN_OPTS.access, file: { type: 'string', short: 'f' } })
   if (values.help) return print(HELP.continue), 0
+  const accessOverride = resolveAccess(values.access)
   const [refText, ...rest] = positionals
   const ref = resolveRef(refText)
   if (ref.kind !== 'job') throw new DshoError('continue needs a job', 2)
@@ -764,11 +767,14 @@ async function cmdContinue(argv) {
   const prompt = taskFrom(rest, { file: values.file }).trim()
   if (!prompt) throw new DshoError('No follow-up task given', 2)
   const backend = parent.backend ?? 'headless'
+  if (accessOverride && backend === 'web') {
+    throw new DshoError('--access works with headless jobs only; this session lives in the DSH web UI', 2, 'change the permission preset in the UI')
+  }
   if (backend === 'web' && !(await web.available())) {
     throw new DshoError('The session lives in the DSH web UI, which is not reachable right now', 5, 'dsho ui start')
   }
   const job = startJob(
-    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, access: parent.access, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
+    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, access: accessOverride ?? parent.access, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
     prompt,
     { header: false },
   )
