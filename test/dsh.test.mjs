@@ -66,6 +66,8 @@ test('a dsh source checkout is launched through its own tsx and tsconfig', (t) =
     '--json',
     '--session-id',
     'session-1',
+    '--approval-policy',
+    'never',
     '-',
   ])
   assert.equal(spec.env.TSX_TSCONFIG_PATH, join(repo, 'tsconfig.json'))

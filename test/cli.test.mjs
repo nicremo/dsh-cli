@@ -5,14 +5,14 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { IS_WINDOWS, killTree, pidAlive, sandbox, sleep, until, withRenameRace } from './helpers.mjs'
+import { IS_WINDOWS, killTree, pidAlive, sandbox, sleep, until, inSandbox } from './helpers.mjs'
 
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
   // ------------------------------------------------------------- run ----
 
-  test('run --wait --json returns the answer and the finished job', withRenameRace(async (s) => {
+  test('run --wait --json returns the answer and the finished job', inSandbox(async (s) => {
     const dir = join(s.ws, 'one')
     const r = await s.run(['run', '-C', dir, '--wait', '--json', 'Say hello'])
     assert.equal(r.code, 0, r.err)
@@ -38,7 +38,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     const starts = s.dshLog().filter((e) => e.event === 'start')
     assert.equal(starts.length, 1)
     assert.equal(starts[0].cwd, dir)
-    assert.deepEqual(starts[0].args, ['--json', '-'])
+    assert.deepEqual(starts[0].args, ['--json', '--approval-policy', 'never', '-'])
     assert.equal(readFileSync(join(s.home, 'jobs', job.id, 'task.md'), 'utf8').split('\n')[0], `Working folder for this task: ${dir}`)
 
     // A new -C folder becomes a workspace.
@@ -46,7 +46,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(readFileSync(join(dir, 'AGENTS.md'), 'utf8'), /Kind: general/)
   }))
 
-  test('run -C on an existing folder leaves it untouched', withRenameRace(async (s) => {
+  test('run -C on an existing folder leaves it untouched', inSandbox(async (s) => {
     const dir = join(s.ws, 'project')
     mkdirSync(dir)
     writeFileSync(join(dir, 'README.md'), 'mine')
@@ -58,7 +58,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal(readFileSync(join(dir, 'README.md'), 'utf8'), 'mine')
   }))
 
-  test('run without -C creates a dated workspace and never reuses one', withRenameRace(async (s) => {
+  test('run without -C creates a dated workspace and never reuses one', inSandbox(async (s) => {
     const [a, b] = [await s.run(['run', '-w', '--json', 'Auto folder!']), await s.run(['run', '-w', '--json', 'Auto folder!'])]
     assert.equal(a.code, 0, a.err)
     assert.equal(dirname(a.json.job.cwd), join(s.ws, 'auto'))
@@ -67,7 +67,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal(b.json.job.cwd, `${a.json.job.cwd}-2`)
   }))
 
-  test('the task can come from stdin or a file, leading dashes and all', withRenameRace(async (s) => {
+  test('the task can come from stdin or a file, leading dashes and all', inSandbox(async (s) => {
     const stdin = await s.run(['run', '-C', join(s.ws, 'stdin'), '-w', '--json', '-'], { input: '--starts with dashes\nsecond line' })
     assert.equal(stdin.code, 0, stdin.err)
     assert.equal(stdin.json.result, 'FAKE-RESULT: --starts with dashes')
@@ -78,7 +78,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal(fromFile.json.result, 'FAKE-RESULT: Task from a file')
   }))
 
-  test('run returns at once; wait, result, logs and files read the job from another process', withRenameRace(async (s) => {
+  test('run returns at once; wait, result, logs and files read the job from another process', inSandbox(async (s) => {
     const dir = join(s.ws, 'two')
     const start = await s.run(['run', '-C', dir, '--json', 'Write a file WRITE note.txt SLEEP 0.3'])
     assert.equal(start.code, 0, start.err)
@@ -131,7 +131,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // -------------------------------------------------------- continue ----
 
-  test('continue resumes the dsh session in the same folder without a new work-folder header', withRenameRace(async (s) => {
+  test('continue resumes the dsh session in the same folder without a new work-folder header', inSandbox(async (s) => {
     const dir = join(s.ws, 'follow')
     const first = await s.run(['run', '-C', dir, '-w', '--json', 'Begin'])
     const sid = first.json.job.sessionId
@@ -143,13 +143,13 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
       { parent: first.json.job.id, cwd: dir, sessionId: sid, status: 'done' },
     )
     const second = s.dshLog().filter((e) => e.event === 'start')[1]
-    assert.deepEqual(second.args, ['--json', '--session-id', sid, '-'])
+    assert.deepEqual(second.args, ['--json', '--session-id', sid, '--approval-policy', 'never', '-'])
     assert.equal(second.cwd, dir, 'dsh only accepts a session id from the same folder')
     assert.equal(readFileSync(join(s.home, 'jobs', next.json.job.id, 'task.md'), 'utf8'), 'Keep going')
     assert.equal((await s.run(['result', first.json.job.id])).out, 'FAKE-RESULT: Begin\n', 'the parent keeps its own answer')
   }))
 
-  test('continue refuses a running job (4), a missing follow-up (2) and a job without session (1)', withRenameRace(async (s, t) => {
+  test('continue refuses a running job (4), a missing follow-up (2) and a job without session (1)', inSandbox(async (s, t) => {
     // The dsh binary does not exist: the job fails before any session is created.
     const broken = await s.run(['run', '-C', join(s.ws, 'broken'), '-w', '--json', 'x'])
     assert.equal(broken.json.job.status, 'failed')
@@ -171,7 +171,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // -------------------------------------------------- failure states ----
 
-  test('a failed turn: exit 1, status failed, error from dsh, stderr in logs --stderr', withRenameRace(async (s) => {
+  test('a failed turn: exit 1, status failed, error from dsh, stderr in logs --stderr', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'fail'), '-w', '--json', 'Please FAIL'])
     assert.equal(r.code, 1)
     assert.equal(r.json.ok, true, 'the command worked, the job failed')
@@ -188,14 +188,14 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(text.out, /Error:     fake: Fake failure/)
   }))
 
-  test('dsh dying without a turn end is a failed job that carries its stderr', withRenameRace(async (s) => {
+  test('dsh dying without a turn end is a failed job that carries its stderr', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'crash'), '-w', '--json', 'Please CRASH'])
     assert.equal(r.code, 1)
     assert.deepEqual({ status: r.json.job.status, exitCode: r.json.job.exitCode, error: r.json.job.error }, { status: 'failed', exitCode: 3, error: 'dsh: fake: crashed hard' })
     assert.equal(r.json.result, null)
   }))
 
-  test('output of dsh that is not JSON does not disturb the job', withRenameRace(async (s) => {
+  test('output of dsh that is not JSON does not disturb the job', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'noise'), '-w', '--json', 'Loud NOISE'])
     assert.equal(r.code, 0, r.err)
     assert.equal(r.json.result, 'FAKE-RESULT: Loud NOISE')
@@ -203,7 +203,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match((await s.run(['logs', r.json.job.id, '--raw', '-n', '100'])).out, /^npm warn this line is not JSON$/m)
   }))
 
-  test('a job over its time limit is killed and reported as timeout', withRenameRace(async (s) => {
+  test('a job over its time limit is killed and reported as timeout', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'slow'), '-t', '1s', '-w', '--json', 'Slow SLEEP 30'])
     assert.equal(r.code, 1)
     assert.deepEqual({ status: r.json.job.status, error: r.json.job.error }, { status: 'timeout', error: 'timed out after 1s' })
@@ -213,7 +213,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // ----------------------------------------------------- wait, cancel ----
 
-  test('wait --timeout exits 4 while the job runs on; result says 4; cancel stops it', withRenameRace(async (s) => {
+  test('wait --timeout exits 4 while the job runs on; result says 4; cancel stops it', inSandbox(async (s) => {
     const job = await s.startRunning(['-C', join(s.ws, 'long'), 'Long task SLEEP 30'])
     const wait = await s.run(['wait', job.id, '--timeout', '1s', '--json'])
     assert.equal(wait.code, 4)
@@ -240,7 +240,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(after.out, /status cancelled/)
   }))
 
-  test('run --wait --max-wait gives up with exit 4 and leaves the job running', withRenameRace(async (s) => {
+  test('run --wait --max-wait gives up with exit 4 and leaves the job running', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'maxwait'), '-w', '--max-wait', '1s', '--json', 'Long SLEEP 30'])
     assert.equal(r.code, 4)
     assert.equal(r.json.timedOut, true)
@@ -248,7 +248,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal((await s.run(['status', r.json.job.id, '--json'])).json.job.status, 'running')
   }))
 
-  test('wait --any returns as soon as the first job is finished', withRenameRace(async (s) => {
+  test('wait --any returns as soon as the first job is finished', inSandbox(async (s) => {
     const slow = await s.startRunning(['-C', join(s.ws, 'slow'), 'Slow SLEEP 30'])
     const fast = await s.run(['run', '-C', join(s.ws, 'fast'), '--json', 'Fast'])
     const r = await s.run(['wait', slow.id, fast.json.job.id, '--any', '--timeout', '20s', '--json'])
@@ -257,7 +257,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.deepEqual(r.json.jobs.map((j) => j.status), ['running', 'done'])
   }))
 
-  test('a job whose runner died is reported as lost', withRenameRace(async (s) => {
+  test('a job whose runner died is reported as lost', inSandbox(async (s) => {
     const job = await s.startRunning(['-C', join(s.ws, 'orphan'), 'Orphan SLEEP 30'])
     killTree(job.ownerPid)
     killTree(job.dshPid)
@@ -272,7 +272,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // ------------------------------------------------ references, lists ----
 
-  test('references: id, unique prefix, @id, name, last; ambiguous is a usage error', withRenameRace(async (s) => {
+  test('references: id, unique prefix, @id, name, last; ambiguous is a usage error', inSandbox(async (s) => {
     const a = (await s.run(['run', '-C', join(s.ws, 'a'), '--name', 'alpha', '-w', '--json', 'A'])).json.job.id
     const b = (await s.run(['run', '-C', join(s.ws, 'b'), '--name', 'beta', '-w', '--json', 'B'])).json.job.id
     const resolved = async (ref) => (await s.run(['status', ref, '--json'])).json.job?.id
@@ -286,7 +286,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(ambiguous.json.error, /ambiguous/)
   }))
 
-  test('status and ls: empty state, then newest first, limits and the running filter', withRenameRace(async (s) => {
+  test('status and ls: empty state, then newest first, limits and the running filter', inSandbox(async (s) => {
     const empty = await s.run(['status', '--json'])
     assert.deepEqual(empty.json, { ok: true, webUi: null, running: [], recent: [], batches: [] })
     assert.match((await s.run(['status'])).out, /No jobs yet/)
@@ -310,7 +310,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // ---------------------------------------------- errors and exit codes ----
 
-  test('usage errors exit 2 with { ok: false, error, code, hint } and start nothing', withRenameRace(async (s) => {
+  test('usage errors exit 2 with { ok: false, error, code, hint } and start nothing', inSandbox(async (s) => {
     const cases = [
       ['frobnicate'],
       ['run'],
@@ -361,7 +361,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(text.err, /^dsho: Unknown option '--bogus'\n {2}hint: dsho <command> --help lists the options\n$/)
   }))
 
-  test('unknown references exit 3', withRenameRace(async (s) => {
+  test('unknown references exit 3', inSandbox(async (s) => {
     const cases = [
       ['status', 'nope'],
       ['result', 'nope'],
@@ -384,7 +384,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.deepEqual(results[0].json, { ok: false, error: 'Nothing found for "nope"', code: 3, hint: 'dsho ls lists jobs, dsho ls --batches lists batches' })
   }))
 
-  test('help and version exit 0', withRenameRace(async (s) => {
+  test('help and version exit 0', inSandbox(async (s) => {
     assert.equal((await s.run(['--version'])).out, `${PKG.version}\n`)
     const usage = await s.run([])
     assert.equal(usage.code, 0)
@@ -400,7 +400,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   // ------------------------------------------------------ open issues ----
 
-  test('issue #10: logs --stderr --json prints JSON', { todo: 'issue #10' }, withRenameRace(async (s) => {
+  test('issue #10: logs --stderr --json prints JSON', inSandbox(async (s) => {
     const r = await s.run(['run', '-C', join(s.ws, 'fail'), '-w', '--json', 'Please FAIL'])
     const logs = await s.run(['logs', r.json.job.id, '--stderr', '--json'])
     assert.equal(logs.code, 0)
@@ -409,7 +409,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.match(JSON.stringify(logs.json), /dsh: fake: Fake failure/)
   }))
 
-  test('not reported yet: a process that reads job.json does not kill the runner (EPERM on rename, Windows)', { todo: IS_WINDOWS && 'unreported: state files are renamed without retry, EPERM kills the runner on Windows' }, async (t) => {
+  test('a process that holds job.json open does not kill the runner (EPERM on rename, Windows)', async (t) => {
     const s = sandbox(t)
     const job = await s.startRunning(['-C', join(s.ws, 'watched'), 'Watched SLEEP 1'])
     // Another process (a second dsho, an editor, a virus scanner) keeps opening job.json
@@ -432,7 +432,7 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal(wait.json.jobs[0].result, 'FAKE-RESULT: Watched SLEEP 1')
   })
 
-  test('issue #7: a dsh that ignores SIGTERM does not outlive its terminated runner', { todo: 'issue #7', skip: IS_WINDOWS && 'Windows ends the process tree unconditionally' }, withRenameRace(async (s) => {
+  test('issue #7: a dsh that ignores SIGTERM does not outlive its terminated runner', { skip: IS_WINDOWS && 'Windows ends the process tree unconditionally' }, inSandbox(async (s) => {
     const job = await s.startRunning(['-C', join(s.ws, 'stubborn'), 'Stubborn IGNORE-SIGTERM SLEEP 60'])
     process.kill(job.ownerPid, 'SIGTERM')
     await until(() => !pidAlive(job.ownerPid), { timeoutMs: 12000, what: 'the runner to exit' })

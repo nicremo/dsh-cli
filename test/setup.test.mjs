@@ -5,7 +5,7 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { installFakeDshBinary, sandbox, withRenameRace } from './helpers.mjs'
+import { installFakeDshBinary, sandbox, inSandbox } from './helpers.mjs'
 
 const MCP = "'@deepseek-ai/dsh-mcp-client'"
 /** A "web" profile patch as the dsh desktop app writes it; all values are fake. */
@@ -44,7 +44,7 @@ function withPoolSkills(s, names) {
 describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
   // ----------------------------------------------------------- setup ----
 
-  test('setup lets dsh scaffold the orchestra profile, copies research MCP servers, model settings and curated skills', withRenameRace(async (s) => {
+  test('setup lets dsh scaffold the orchestra profile, copies research MCP servers, model settings and curated skills', inSandbox(async (s) => {
     withWebProfile(s)
     withPoolSkills(s, ['firecrawl', 'playwright', 'unrelated-skill'])
     const r = await s.run(['setup', '--json'])
@@ -85,7 +85,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.match((await s.run(['setup'])).out, /^dsh profile "orchestra" ready: /)
   }))
 
-  test('setup --mcp none --no-llm --no-skill copies nothing and says what is missing', withRenameRace(async (s) => {
+  test('setup --mcp none --no-llm --no-skill copies nothing and says what is missing', inSandbox(async (s) => {
     withWebProfile(s)
     const r = await s.run(['setup', '--mcp', 'none', '--no-llm', '--no-skill', '--json'])
     assert.equal(r.code, 0, r.err + r.out)
@@ -99,7 +99,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.doesNotMatch(readFileSync(join(s.dshHome, 'profiles', 'orchestra', 'cordis.patch.yml'), 'utf8'), /firecrawl|openrouter/)
   }))
 
-  test('setup fails with exit 5 when dsh rejects the profile', withRenameRace(async (s) => {
+  test('setup fails with exit 5 when dsh rejects the profile', inSandbox(async (s) => {
     const r = await s.run(['setup', '--no-skill', '--json'])
     assert.equal(r.code, 5)
     assert.equal(r.json.ok, false)
@@ -107,7 +107,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.match(r.json.error, /invalid profile configuration/)
   }, (t) => sandbox(t, { FAKE_DSH_REJECT_CONFIG: '1' })))
 
-  test('issue #8: setup --skills drops the links of an earlier selection', { todo: 'issue #8' }, withRenameRace(async (s) => {
+  test('issue #8: setup --skills drops the links of an earlier selection', inSandbox(async (s) => {
     withPoolSkills(s, ['alpha', 'beta'])
     const first = await s.run(['setup', '--skills', 'alpha,beta', '--no-skill', '--json'])
     assert.deepEqual(first.json.profile.skills, ['alpha', 'beta'])
@@ -120,7 +120,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
 
   // ------------------------------------------------ launching real dsh ----
 
-  test('an installed dsh binary runs with the headless profile, the per-job model patch and stored provider keys', withRenameRace(async (s) => {
+  test('an installed dsh binary runs with the headless profile, the per-job model patch and stored provider keys', inSandbox(async (s) => {
     const bin = installFakeDshBinary(join(s.root, 'bin'))
     Object.assign(s.env, { DSHO_DSH_CMD: '', DSHO_DSH_BIN: bin, OPENROUTER_API_KEY: 'test-from-env' })
     writeFileSync(join(s.dshHome, 'settings.yaml'), 'permission:\n  defaultPreset: danger-full-access\nagent-default-model:\n  provider: deepseek-official\n  model: deepseek-flash\n  reasoningEffort: max\n')
@@ -133,11 +133,11 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.equal(tuned.code, 0, tuned.err + tuned.out)
 
     const [first, second] = s.dshLog().filter((e) => e.event === 'start')
-    assert.deepEqual(first.args, ['--profile', 'headless', '--json', '-'])
+    assert.deepEqual(first.args, ['--profile', 'headless', '--json', '--approval-policy', 'never', '-'])
     // Workers get stored keys through the environment; a key that is already set wins.
     assert.deepEqual(first.env, { DSHO_JOB: '1', DEEPSEEK_API_KEY: 'test-stored-key', OPENROUTER_API_KEY: 'test-from-env' })
     const jobDir = join(s.home, 'jobs', tuned.json.job.id)
-    assert.deepEqual(second.args, ['--profile', 'headless', '--patch', join(jobDir, 'settings.patch.yml'), '--json', '-'])
+    assert.deepEqual(second.args, ['--profile', 'headless', '--patch', join(jobDir, 'settings.patch.yml'), '--json', '--approval-policy', 'never', '-'])
     // The patch points dsh at a settings copy with the other model; the rest stays.
     assert.ok(readFileSync(join(jobDir, 'settings.patch.yml'), 'utf8').includes(JSON.stringify(join(jobDir, 'settings.yaml'))))
     const settings = JSON.parse(readFileSync(join(jobDir, 'settings.yaml'), 'utf8'))
@@ -147,7 +147,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     // Once the orchestra profile exists, jobs use it.
     assert.equal((await s.run(['setup', '--no-skill', '--json'])).code, 0)
     await s.run(['run', '-C', join(s.ws, 'after'), '-w', '--json', 'After setup'])
-    assert.deepEqual(s.dshLog().filter((e) => e.event === 'start')[2].args, ['--profile', 'orchestra', '--json', '-'])
+    assert.deepEqual(s.dshLog().filter((e) => e.event === 'start')[2].args, ['--profile', 'orchestra', '--json', '--approval-policy', 'never', '-'])
 
     // A configured provider and model apply to every job without -m.
     Object.assign(s.env, { DSHO_PROVIDER: 'openrouter', DSHO_MODEL: 'v4-flash' })
@@ -158,7 +158,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
 
   // ---------------------------------------------------------- doctor ----
 
-  test('doctor exits 5 while something mandatory is missing and 0 once it is there', withRenameRace(async (s) => {
+  test('doctor exits 5 while something mandatory is missing and 0 once it is there', inSandbox(async (s) => {
     const sick = await s.run(['doctor', '--json'])
     assert.equal(sick.code, 5)
     assert.equal(sick.json.ok, true)
@@ -167,16 +167,25 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.deepEqual(sick.json.checks.filter((c) => !c.ok && !c.optional).map((c) => c.name), ['credentials'])
     for (const c of sick.json.checks) assert.deepEqual(Object.keys(c).sort(), ['detail', 'name', 'ok', 'optional'])
 
-    writeFileSync(join(s.dshHome, '.credentials.yaml'), 'version: 1\nrefs: {}\n')
+    // The web UI's browser-session grant lives in the same store but is no model key.
+    writeFileSync(join(s.dshHome, '.credentials.yaml'), 'version: 1\nrecords:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: not-a-model-key\n')
+    const stillSick = await s.run(['doctor', '--json'])
+    assert.equal(stillSick.code, 5)
+    assert.deepEqual(stillSick.json.checks.filter((c) => !c.ok && !c.optional).map((c) => c.name), ['credentials'])
+
+    writeFileSync(join(s.dshHome, '.credentials.yaml'), 'version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-test-value\n')
     const well = await s.run(['doctor', '--json'])
     assert.equal(well.code, 0, well.out)
     assert.equal(well.json.healthy, true)
+    const creds = well.json.checks.find((c) => c.name === 'credentials')
+    assert.equal(creds.detail, 'API keys: DEEPSEEK_API_KEY (credentials store)')
+    assert.ok(!well.out.includes('sk-test-value'), 'doctor must never print key values')
     assert.match((await s.run(['doctor'])).out, /^✓ node /m)
   }))
 
   // ---------------------------------------------------------- config ----
 
-  test('config set, unset and show; environment variables win over config.json', withRenameRace(async (s) => {
+  test('config set, unset and show; environment variables win over config.json', inSandbox(async (s) => {
     const set = await s.run(['config', 'set', 'model', 'v4-flash', '--json'])
     assert.equal(set.code, 0, set.err)
     assert.deepEqual(set.json.stored, { model: 'v4-flash' })
@@ -195,7 +204,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.equal(unset.json.effective.model, null)
   }))
 
-  test('stored config drives later commands: workspace root with ~ and the backend', withRenameRace(async (s) => {
+  test('stored config drives later commands: workspace root with ~ and the backend', inSandbox(async (s) => {
     delete s.env.DSHO_WORKSPACES
     delete s.env.DSHO_BACKEND
     await s.run(['config', 'set', 'workspaces', '~/my-workspaces'])
@@ -216,11 +225,11 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
 
   // ------------------------------------------------------- workspaces ----
 
-  test('ws init creates the folder, the marker and an AGENTS.md describing it', withRenameRace(async (s) => {
+  test('ws init creates the folder, the marker and an AGENTS.md describing it', inSandbox(async (s) => {
     const dir = join(s.ws, 'deep', 'new')
     const r = await s.run(['ws', 'init', dir, '--kind', 'research', '--description', 'Battery market 2026', '--json'])
     assert.equal(r.code, 0, r.err)
-    assert.deepEqual(r.json, { ok: true, workspace: dir, agentsMd: join(dir, 'AGENTS.md') })
+    assert.deepEqual(r.json, { ok: true, workspace: dir, agentsMd: join(dir, 'AGENTS.md'), agentsMdAction: 'written' })
     assert.equal(JSON.parse(readFileSync(join(dir, '.dsho-workspace'), 'utf8')).kind, 'research')
     const agents = readFileSync(join(dir, 'AGENTS.md'), 'utf8')
     assert.match(agents, /Kind: research/)
@@ -229,7 +238,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.equal((await s.run(['ws', '--help'])).code, 0)
   }))
 
-  test('a job started below a workspace does not turn its subfolder into another workspace', withRenameRace(async (s) => {
+  test('a job started below a workspace does not turn its subfolder into another workspace', inSandbox(async (s) => {
     const root = join(s.ws, 'project')
     await s.run(['ws', 'init', root])
     const r = await s.run(['run', '-C', join(root, 'sub', 'task'), '-w', '--json', 'Nested'])
@@ -238,7 +247,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.ok(!existsSync(join(root, 'sub', 'task', 'AGENTS.md')))
   }))
 
-  test('issue #2: ws init keeps an existing AGENTS.md', { todo: 'issue #2' }, withRenameRace(async (s) => {
+  test('issue #2: ws init keeps an existing AGENTS.md', inSandbox(async (s) => {
     const dir = join(s.ws, 'mine')
     mkdirSync(dir)
     writeFileSync(join(dir, 'AGENTS.md'), '# My own instructions\n')
@@ -248,7 +257,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
 
   // ------------------------------------------------------ agent skill ----
 
-  test('skill install puts the skill into ~/.agents/skills and links the agents that are installed', withRenameRace(async (s) => {
+  test('skill install puts the skill into ~/.agents/skills and links the agents that are installed', inSandbox(async (s) => {
     mkdirSync(join(s.userHome, '.claude'))
     mkdirSync(join(s.userHome, '.codex'))
     const canonical = join(s.userHome, '.agents', 'skills', 'dsh-orchestration')
@@ -278,7 +287,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.ok(existsSync(join(copied, 'SKILL.md')))
   }))
 
-  test('skill install never replaces a skill of the same name that it did not install', withRenameRace(async (s, t) => {
+  test('skill install never replaces a skill of the same name that it did not install', inSandbox(async (s, t) => {
     const foreign = join(s.userHome, '.codex', 'skills', 'dsh-orchestration')
     mkdirSync(foreign, { recursive: true })
     writeFileSync(join(foreign, 'SKILL.md'), 'mine')
@@ -298,7 +307,7 @@ describe('dsho CLI, setup and environment', { concurrency: 8 }, () => {
     assert.equal(readFileSync(join(canonical, 'SKILL.md'), 'utf8'), 'mine')
   }))
 
-  test('skill install honours CLAUDE_CONFIG_DIR and CODEX_HOME', withRenameRace(async (s) => {
+  test('skill install honours CLAUDE_CONFIG_DIR and CODEX_HOME', inSandbox(async (s) => {
     const claude = join(s.root, 'elsewhere', 'claude')
     mkdirSync(claude, { recursive: true })
     Object.assign(s.env, { CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(s.root, 'elsewhere', 'codex') })

@@ -1,6 +1,6 @@
 // Small shared helpers: ids, durations, slugs, JSON files, processes.
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -56,19 +56,50 @@ export function slug(text, max = 40) {
   return s || 'task'
 }
 
+/** Errors Windows raises while another process has the file open (reader, writer, virus scanner). */
+const SHARING_ERRORS = new Set(['EPERM', 'EBUSY', 'EACCES'])
+const SHARING_RETRY_MS = 2000
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * Run `fn`, retrying while the file is briefly locked by another process. Job and batch
+ * files are rewritten by the launching command and the runner at the same time; on
+ * Windows a rename onto (or a read of) a file the other process holds fails with EPERM.
+ */
+function withSharingRetry(fn) {
+  const deadline = Date.now() + SHARING_RETRY_MS
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      return fn()
+    } catch (err) {
+      if (!SHARING_ERRORS.has(err.code) || Date.now() >= deadline) throw err
+      sleepSync(delay)
+    }
+  }
+}
+
 export function writeJsonAtomic(file, value) {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n')
-  renameSync(tmp, file)
+  try {
+    withSharingRetry(() => renameSync(tmp, file))
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
 }
 
 export function readJson(file, fallback = undefined) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return JSON.parse(readFileSync(file, 'utf8'))
+      return JSON.parse(withSharingRetry(() => readFileSync(file, 'utf8')))
     } catch (err) {
       if (err.code === 'ENOENT') return fallback
+      // A parse error means a torn read; try again.
       if (attempt === 2) throw err
     }
   }

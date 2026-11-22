@@ -185,14 +185,7 @@ export function sandbox(t, extraEnv = {}) {
     }
   })
 
-  // The rename race (see withRenameRace) can also hit the dsho command itself.
-  const RENAME_RACE = /EPERM: operation not permitted, rename/
-  let raced = false
-  const run = async (args, opts) => {
-    const res = await dsho(env, args, opts)
-    if (RENAME_RACE.test(res.out + res.err)) raced = true
-    return res
-  }
+  const run = (args, opts) => dsho(env, args, opts)
 
   return {
     ...dirs,
@@ -205,8 +198,6 @@ export function sandbox(t, extraEnv = {}) {
       }),
     jobFile,
     dshLog,
-    /** True when a runner of this sandbox died of the Windows rename race (see withRenameRace). */
-    hitRenameRace: () => raced || RENAME_RACE.test(diagnostics()),
     /** Start a job and wait until its dsh process is up. Returns the stored job. */
     async startRunning(args) {
       const known = new Set(dshLog().map((e) => e.pid))
@@ -220,26 +211,9 @@ export function sandbox(t, extraEnv = {}) {
   }
 }
 
-/**
- * Known bug, Windows only: the launching dsho and the runner it just started both rewrite
- * job.json and batch.json, and a rename onto a file the other process has open fails with
- * EPERM. Either the runner dies (the jobs end up "lost") or the launching command fails.
- * cli.test.mjs pins the bug down in a test of its own. Until it is fixed, a test that failed
- * while this error was provably raised (runner log or command output) starts over in a fresh
- * sandbox, at most twice, instead of failing at random. Remove this wrapper with the fix.
- */
-export function withRenameRace(body, world = sandbox) {
-  return async (t) => {
-    for (let attempt = 1; ; attempt++) {
-      const s = await world(t)
-      try {
-        return await body(s, t)
-      } catch (err) {
-        if (!IS_WINDOWS || attempt === 3 || !s.hitRenameRace()) throw err
-        t.diagnostic(`attempt ${attempt}: EPERM on rename (known Windows bug), starting over`)
-      }
-    }
-  }
+/** Run a test body in a fresh sandbox (temp home, fake dsh) that is removed afterwards. */
+export function inSandbox(body, world = sandbox) {
+  return async (t) => body(await world(t), t)
 }
 
 /**

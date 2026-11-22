@@ -4,7 +4,7 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pidAlive, until, withRenameRace } from './helpers.mjs'
+import { pidAlive, until, inSandbox } from './helpers.mjs'
 
 /** Highest number of fake dsh processes alive at the same time. */
 function peakConcurrency(log) {
@@ -19,7 +19,7 @@ function peakConcurrency(log) {
 }
 
 describe('dsho CLI, batches', { concurrency: 8 }, () => {
-  test('batch -f: one job and one folder per task, readable as a whole afterwards', withRenameRace(async (s) => {
+  test('batch -f: one job and one folder per task, readable as a whole afterwards', inSandbox(async (s) => {
     const file = join(s.ws, 'tasks.txt')
     const root = join(s.ws, 'batch')
     writeFileSync(file, '# comment\nTask one\nTask two WRITE a.txt\n\nTask three\n')
@@ -65,7 +65,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal(logs.json.code, 2)
   }))
 
-  test('tasks come from ---blocks, .json, .jsonl, --task, positionals or stdin', withRenameRace(async (s) => {
+  test('tasks come from ---blocks, .json, .jsonl, --task, positionals or stdin', inSandbox(async (s) => {
     const started = async (args, opts) => {
       const r = await s.run(['batch', '--json', ...args], opts)
       assert.equal(r.code, 0, r.err + r.out)
@@ -100,7 +100,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     await s.run(['cancel', many.batch.id])
   }))
 
-  test('a batch with a failure is partial (exit 1); collect merges answers, sources and manifests', withRenameRace(async (s) => {
+  test('a batch with a failure is partial (exit 1); collect merges answers, sources and manifests', inSandbox(async (s) => {
     const root = join(s.ws, 'mix')
     const file = join(s.ws, 'tasks.jsonl')
     writeFileSync(
@@ -156,7 +156,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal(notABatch.code, 2)
   }))
 
-  test('--parallel 1 runs the jobs one after the other, in order', withRenameRace(async (s) => {
+  test('--parallel 1 runs the jobs one after the other, in order', inSandbox(async (s) => {
     const r = await s.run(['batch', '--task', 'A SLEEP 0.2', '--task', 'B SLEEP 0.2', '--task', 'C SLEEP 0.2', '-p', '1', '-C', join(s.ws, 'seq'), '-w', '--json'])
     assert.equal(r.code, 0, r.err + r.out)
     const log = s.dshLog()
@@ -164,7 +164,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal(peakConcurrency(log), 1)
   }))
 
-  test('--parallel 2 keeps two jobs running at a time, never more', withRenameRace(async (s) => {
+  test('--parallel 2 keeps two jobs running at a time, never more', inSandbox(async (s) => {
     const tasks = ['A', 'B', 'C', 'D'].flatMap((name) => ['--task', `${name} SLEEP 1.5`])
     const r = await s.run(['batch', ...tasks, '-p', '2', '-C', join(s.ws, 'par'), '-w', '--json'])
     assert.equal(r.code, 0, r.err + r.out)
@@ -173,7 +173,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal(peakConcurrency(s.dshLog()), 2)
   }))
 
-  test('cancel on a batch stops the running jobs and never starts the queued ones', withRenameRace(async (s) => {
+  test('cancel on a batch stops the running jobs and never starts the queued ones', inSandbox(async (s) => {
     const tasks = ['A', 'B', 'C', 'D'].flatMap((name) => ['--task', `${name} SLEEP 30`])
     const start = await s.run(['batch', ...tasks, '-p', '2', '-C', join(s.ws, 'stop'), '--json'])
     assert.equal(start.code, 0, start.err + start.out)
@@ -200,7 +200,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal((await s.run(['wait', id])).code, 1)
   }))
 
-  test('research: one job per question with the research prompt, depth and focus', withRenameRace(async (s) => {
+  test('research: one job per question with the research prompt, depth and focus', inSandbox(async (s) => {
     const root = join(s.ws, 'rs')
     const r = await s.run(['research', 'What is A?', 'What is B?', '-C', root, '--depth', 'quick', '--focus', 'Only EU sources', '--json'])
     assert.equal(r.code, 0, r.err)
@@ -220,7 +220,7 @@ describe('dsho CLI, batches', { concurrency: 8 }, () => {
     assert.equal(JSON.parse(readFileSync(join(root, '.dsho-workspace'), 'utf8')).kind, 'research')
   }))
 
-  test('materials: one job per kind; URLs only reach the kinds that capture pages', withRenameRace(async (s) => {
+  test('materials: one job per kind; URLs only reach the kinds that capture pages', inSandbox(async (s) => {
     const r = await s.run(['materials', 'Electric cars in Germany', '--kinds', 'screenshots,stock-video', '--url', 'https://example.com', '--count', '3', '-C', join(s.ws, 'mat'), '--json'])
     assert.equal(r.code, 0, r.err)
     assert.equal(r.json.batch.template, 'materials')

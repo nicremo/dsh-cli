@@ -93,7 +93,7 @@ test('summarizeJobs folds job states into one batch status', () => {
   assert.equal(summary('cancelled', 'failed').status, 'failed')
 })
 
-test('issue #9: "last" is the job created last, also when ids share a millisecond', { todo: 'issue #9' }, (t) => {
+test('issue #9: "last" is the job created last, also when ids share a millisecond', (t) => {
   // A frozen clock: every job below is created in the same millisecond, as in a fast batch.
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') })
   for (let i = 1; i <= 12; i++) {

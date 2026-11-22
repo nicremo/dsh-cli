@@ -77,7 +77,7 @@ test('timeline marks failed tool results and shortens long output unless full', 
     { type: 'text', text: 'x'.repeat(500) },
   ]
   const lines = timeline(events)
-  assert.deepEqual(lines.slice(0, 5), ['  ✓ fine', '  ✗ failed: exit 1', '  ✓ {"rows":2}', 'turn_end: error / fake / broke', 'error: boom'])
+  assert.deepEqual(lines.slice(0, 5), ['  ✓ fine', '  ✗ failed: exit 1', '  ✓ {"rows":2}', 'turn_end: error / fake: broke', 'error: boom'])
   assert.equal(lines[5], `text: ${'x'.repeat(199)}…`)
   assert.equal(timeline(events, { full: true })[5], `text: ${'x'.repeat(500)}`)
 })

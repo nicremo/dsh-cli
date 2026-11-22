@@ -5,12 +5,12 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeWeb } from './fake-web.mjs'
-import { IS_WINDOWS, pidAlive, sandbox, until, withRenameRace } from './helpers.mjs'
+import { IS_WINDOWS, pidAlive, sandbox, until, inSandbox } from './helpers.mjs'
 import { translate } from '../src/web.mjs'
 
 // The `session/page` contract the everyday tests run against. Switch to 'structured'
 // (DSH 0.2.2+) once issue #3 is fixed; the two contract tests below cover both either way.
-const CONTRACT = process.env.DSHO_TEST_WEB_CONTRACT ?? 'legacy'
+const CONTRACT = process.env.DSHO_TEST_WEB_CONTRACT ?? 'structured'
 
 /** A fake web UI plus a sandbox whose dsho talks to it. */
 async function webWorld(t, { cursorContract = CONTRACT, env = {} } = {}) {
@@ -28,7 +28,7 @@ async function webWorld(t, { cursorContract = CONTRACT, env = {} } = {}) {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 describe('web backend', { concurrency: 6 }, () => {
-  test('run registers the folder as workspace, opens a named session, prompts once and stores the answer', withRenameRace(async (w) => {
+  test('run registers the folder as workspace, opens a named session, prompts once and stores the answer', inSandbox(async (w) => {
     const dir = join(w.ws, 'one')
     const r = await w.run(['run', '-C', dir, '-w', '--json', '--name', 'My web job', 'Hello web TOOL'])
     assert.equal(r.code, 0, r.err + r.out)
@@ -70,7 +70,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.match(logs.out, /final: WEB-RESULT: Hello web TOOL/)
   }, webWorld))
 
-  test('a web batch becomes one workspace with one named session per job', withRenameRace(async (w) => {
+  test('a web batch becomes one workspace with one named session per job', inSandbox(async (w) => {
     const root = join(w.ws, 'research')
     const r = await w.run(['research', 'Question A', 'Question B', '-C', root, '-w', '--json'])
     assert.equal(r.code, 0, r.err + r.out)
@@ -92,7 +92,7 @@ describe('web backend', { concurrency: 6 }, () => {
     }
   }, webWorld))
 
-  test('continue prompts the same web session again', withRenameRace(async (w) => {
+  test('continue prompts the same web session again', inSandbox(async (w) => {
     const first = await w.run(['run', '-C', join(w.ws, 'follow'), '-w', '--json', 'Begin'])
     assert.equal(first.code, 0, first.err + first.out)
     const next = await w.run(['continue', first.json.job.id, 'Carry on', '-w', '--json'])
@@ -107,13 +107,13 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal((await w.run(['result', first.json.job.id])).out.trim(), 'WEB-RESULT: Begin')
   }, webWorld))
 
-  test('-m and --effort select the model on the web session', withRenameRace(async (w) => {
+  test('-m and --effort select the model on the web session', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'model'), '-m', 'pro', '--effort', 'high', '-w', '--json', 'Model test'])
     assert.equal(r.code, 0, r.err + r.out)
     assert.deepEqual(w.fake.sessions.get(r.json.job.sessionId).model, { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' })
   }, webWorld))
 
-  test('cancel aborts the running web turn', withRenameRace(async (w) => {
+  test('cancel aborts the running web turn', inSandbox(async (w) => {
     const start = await w.run(['run', '-C', join(w.ws, 'abort'), '--json', 'Long SLEEP 30'])
     assert.equal(start.code, 0, start.err + start.out)
     const id = start.json.job.id
@@ -127,7 +127,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(w.fake.sessions.get(sessionId).running, null, 'the turn is over on the server')
   }, webWorld))
 
-  test('a web job that exceeds its time limit is cancelled on the server and reported as timeout', withRenameRace(async (w) => {
+  test('a web job that exceeds its time limit is cancelled on the server and reported as timeout', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'slow'), '-t', '1s', '-w', '--json', 'Slow SLEEP 30'])
     assert.equal(r.code, 1, r.err + r.out)
     assert.equal(r.json.job.status, 'timeout')
@@ -135,7 +135,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(w.fake.callsFor(r.json.job.sessionId).filter((x) => x.method === 'session/cancel').length, 1)
   }, webWorld))
 
-  test('a failed web turn makes a failed job with the server error', withRenameRace(async (w) => {
+  test('a failed web turn makes a failed job with the server error', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'failure'), '-w', '--json', 'Please FAIL'])
     assert.equal(r.code, 1)
     assert.equal(r.json.ok, true, 'the command worked, the job failed')
@@ -143,7 +143,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(r.json.job.error, 'fake: Web failure')
   }, webWorld))
 
-  test('more events than one page holds are all collected', withRenameRace(async (w) => {
+  test('more events than one page holds are all collected', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'pages'), '-w', '--json', 'Busy TOOLS 30'])
     assert.equal(r.code, 0, r.err + r.out)
     // 30 tool calls commit at once: about 150 events, several pages of 40.
@@ -153,7 +153,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.ok(w.fake.calls.some((c) => c.method === 'session/page' && c.args.request.beforeSeq != null), 'older pages were requested')
   }, webWorld))
 
-  test('--backend headless runs a separate dsh even when the UI is up', withRenameRace(async (w) => {
+  test('--backend headless runs a separate dsh even when the UI is up', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'headless'), '-b', 'headless', '-w', '--json', 'anything'])
     assert.equal(r.code, 0, r.err + r.out)
     assert.equal(r.json.job.backend, 'headless')
@@ -161,7 +161,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.deepEqual(w.fake.calls, [])
   }, webWorld))
 
-  test('UI down: --backend web fails with exit 5, auto falls back to headless', withRenameRace(async (w) => {
+  test('UI down: --backend web fails with exit 5, auto falls back to headless', inSandbox(async (w) => {
     await w.fake.close()
     const forced = await w.run(['run', '-C', join(w.ws, 'forced'), '-b', 'web', '--json', 'x'])
     assert.equal(forced.code, 5)
@@ -174,7 +174,7 @@ describe('web backend', { concurrency: 6 }, () => {
   }, webWorld))
 
   // No token in the environment: only `ui login` can make the UI usable.
-  test('ui login stores the token URL for later commands and rejects bad ones', withRenameRace(async (w) => {
+  test('ui login stores the token URL for later commands and rejects bad ones', inSandbox(async (w) => {
     const before = await w.run(['run', '-C', join(w.ws, 'a'), '-b', 'web', '--json', 'x'])
     assert.equal(before.code, 5)
 
@@ -196,7 +196,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(status.json.webUi, w.fake.base)
   }, (t) => webWorld(t, { env: { DSHO_WEB_TOKEN_URL: '' } })))
 
-  test('an expired cookie is renewed from the token URL', withRenameRace(async (w) => {
+  test('an expired cookie is renewed from the token URL', inSandbox(async (w) => {
     const first = await w.run(['run', '-C', join(w.ws, 'c1'), '-w', '--json', 'One'])
     assert.equal(first.code, 0, first.err + first.out)
     w.fake.expireCookies()
@@ -206,7 +206,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(second.json.result, 'WEB-RESULT: Two')
   }, webWorld))
 
-  test('ui --print names the workspace and session of a job without opening a browser', withRenameRace(async (w) => {
+  test('ui --print names the workspace and session of a job without opening a browser', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'look'), '--name', 'Find me', '-w', '--json', 'x'])
     const ui = await w.run(['ui', r.json.job.id, '--print', '--json'])
     assert.equal(ui.code, 0, ui.err)
@@ -215,13 +215,13 @@ describe('web backend', { concurrency: 6 }, () => {
 
   // ------------------------------------------------- session/page contracts ----
 
-  test('a job completes against the legacy session/page contract (DSH before 0.2.2)', { todo: CONTRACT === 'legacy' ? false : 'only if dsho keeps supporting DSH before 0.2.2' }, withRenameRace(async (w) => {
+  test('a job completes against the legacy session/page contract (DSH before 0.2.2)', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'old'), '-w', '--json', 'Old server TOOL'])
     assert.equal(r.json.job.status, 'done', r.json.job.error)
     assert.equal(r.json.result, 'WEB-RESULT: Old server TOOL')
   }, (t) => webWorld(t, { cursorContract: 'legacy' })))
 
-  test('issue #3: a job completes against the structured session/page contract (DSH 0.2.2+)', { todo: CONTRACT === 'structured' ? false : 'issue #3' }, withRenameRace(async (w) => {
+  test('issue #3: a job completes against the structured session/page contract (DSH 0.2.2+)', inSandbox(async (w) => {
     const r = await w.run(['run', '-C', join(w.ws, 'new'), '-w', '--json', 'New server TOOL'])
     assert.equal(r.json.job.status, 'done', r.json.job.error)
     assert.equal(r.json.result, 'WEB-RESULT: New server TOOL')
@@ -231,7 +231,7 @@ describe('web backend', { concurrency: 6 }, () => {
 
   // ------------------------------------------------------- open issues ----
 
-  test('issue #5: a later turn in the same session does not overwrite the job result', { todo: 'issue #5' }, withRenameRace(async (w) => {
+  test('issue #5: a later turn in the same session does not overwrite the job result', inSandbox(async (w) => {
     // INTRUDER: someone else's queued prompt runs right behind ours; both turns are
     // committed before dsho polls again.
     const r = await w.run(['run', '-C', join(w.ws, 'shared'), '-w', '--json', 'Mine INTRUDER'])
@@ -240,7 +240,7 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(readFileSync(join(w.home, 'jobs', r.json.job.id, 'result.md'), 'utf8'), 'WEB-RESULT: Mine INTRUDER')
   }, webWorld))
 
-  test('issue #6: SIGTERM to the runner of a web job cancels the turn on the server', { todo: 'issue #6', skip: IS_WINDOWS && 'Windows cannot deliver SIGTERM to a handler' }, withRenameRace(async (w) => {
+  test('issue #6: SIGTERM to the runner of a web job cancels the turn on the server', { skip: IS_WINDOWS && 'Windows cannot deliver SIGTERM to a handler' }, inSandbox(async (w) => {
     const start = await w.run(['run', '-C', join(w.ws, 'term'), '--json', 'Long SLEEP 30'])
     const id = start.json.job.id
     await until(() => w.fake.calls.some((c) => c.method === 'session/prompt'), { what: 'the prompt to reach the web UI' })
