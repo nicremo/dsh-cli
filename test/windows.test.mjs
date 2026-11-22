@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isolateProcess, tempDir } from './helpers.mjs'
 
 isolateProcess()
 const { resolveCmdShim, spawnSpec, which } = await import('../src/dsh.mjs')
+const { msixCopies } = await import('../src/profile.mjs')
 
 // Real shim shapes, shortened: npm's generated .cmd and the DeepSeek Harness desktop launcher
 const NPM_SHIM = `@ECHO off\r
@@ -56,6 +57,20 @@ test('resolveCmdShim returns null for an unknown shim', (t) => {
   const dir = tempDir(t)
   writeFileSync(join(dir, 'dsh.cmd'), '@echo off\r\nsomething.exe %*\r\n')
   assert.equal(resolveCmdShim(join(dir, 'dsh.cmd')), null)
+})
+
+test('msixCopies finds a private copy of an %APPDATA% file in an MSIX package', { skip: process.platform !== 'win32' && 'Windows only' }, (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsho-msix-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const appData = join(root, 'Roaming')
+  const localAppData = join(root, 'Local')
+  const shim = join(appData, 'npm', 'dsh.cmd')
+  mkdirSync(join(localAppData, 'Packages', 'Claude_test', 'LocalCache', 'Roaming', 'npm'), { recursive: true })
+  mkdirSync(join(localAppData, 'Packages', 'Other_app'), { recursive: true })
+  writeFileSync(join(localAppData, 'Packages', 'Claude_test', 'LocalCache', 'Roaming', 'npm', 'dsh.cmd'), '@echo off\n')
+  assert.deepEqual(msixCopies(shim, { appData, localAppData }), ['Claude_test'])
+  assert.deepEqual(msixCopies(join(appData, 'npm', 'other.cmd'), { appData, localAppData }), [])
+  assert.deepEqual(msixCopies(join(root, 'elsewhere', 'dsh.cmd'), { appData, localAppData }), [])
 })
 
 test('DSHO_DSH_CMD may be a script that runs through node', () => {

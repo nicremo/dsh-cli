@@ -232,6 +232,27 @@ export function findPython() {
   return (pythonCache = { python: cfg('python') || PYTHON, playwright: null })
 }
 
+/**
+ * Windows: MSIX apps (the Claude desktop app, for example) virtualize %APPDATA%. A file
+ * written there from inside such an app really lands in
+ * %LOCALAPPDATA%\Packages\<package>\LocalCache\Roaming\..., visible only to that app.
+ * Returns the names of the packages that hold a private copy of `path`.
+ */
+export function msixCopies(path, { appData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA } = {}) {
+  if (process.platform !== 'win32' || !path || !appData || !localAppData) return []
+  const root = resolve(appData) + sep
+  if (!resolve(path).toLowerCase().startsWith(root.toLowerCase())) return []
+  const rel = resolve(path).slice(root.length)
+  const packages = join(localAppData, 'Packages')
+  let names = []
+  try {
+    names = readdirSync(packages)
+  } catch {
+    return []
+  }
+  return names.filter((name) => existsSync(join(packages, name, 'LocalCache', 'Roaming', rel)))
+}
+
 const KEY_NAME = /^[A-Z][A-Z0-9_]*_API_KEY$/
 
 /**
@@ -293,6 +314,15 @@ export function doctor() {
 
   const dsh = resolveDsh()
   add('dsh', Boolean(dsh), dsh ? `${dsh.kind}: ${dsh.where}` : 'not found: npm install -g @deepseek-ai/dsh (or dsho config set dshBin|dshRepo <path>)')
+  const privateCopies = dsh ? msixCopies(dsh.where) : []
+  if (privateCopies.length) {
+    add(
+      'msix',
+      false,
+      `dsh sits in the private storage of the app ${privateCopies.join(', ')} (%LOCALAPPDATA%\\Packages\\...\\LocalCache): it was installed from inside that app and may not exist for a normal terminal. Install Node.js, dsh and dsh-cli from PowerShell or Windows Terminal`,
+      true,
+    )
+  }
 
   const profile = activeProfile()
   add('profile', profile === PROFILE, profile === PROFILE ? profileDir() : 'orchestra missing, headless jobs use the shipped headless profile (run dsho setup)', true)

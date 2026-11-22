@@ -209,6 +209,7 @@ Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh 
 | `MISSING_CREDENTIAL` in `dsho logs <job> --stderr` | store your DeepSeek API key once: `dsho ui start`, then Settings → Models in the UI (or set `DEEPSEEK_API_KEY`) |
 | a worker reports that an action was rejected | the sandbox blocked it (workers never wait for approvals); widen it for that job with `--access full` |
 | Windows: `dsh not found` | npm's global folder (`%APPDATA%\npm`) must be on `PATH`; or `dsho config set dshBin "%APPDATA%\npm\dsh.cmd"` |
+| Windows: `dsho doctor` reports `msix` | dsh was installed from inside an MSIX app (such as the Claude desktop app) and exists only there; install Node.js, dsh and dsh-cli again from PowerShell or Windows Terminal |
 | `dsho capture` fails | `pip install playwright && python3 -m playwright install chromium`; scroll videos need ffmpeg |
 | a page hangs during capture | the watchdog stops it after `--max-time` (default 90 s for shots) |
 
