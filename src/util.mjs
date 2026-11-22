@@ -23,17 +23,31 @@ export class DshoError extends Error {
 const B36 = '0123456789abcdefghijklmnopqrstuvwxyz'
 
 let lastIdTime = 0
+let idSeq = 0
 
 /**
- * Time-ordered short id, e.g. `j-mgf3k2ab7x9`. The time part never repeats within a
- * process (a batch creates many jobs in one millisecond), so ids sort in creation
- * order and `last` is unambiguous.
+ * Time-ordered short id, e.g. `j-mgf3k2a01ab7x`: wall-clock time, a two-character
+ * sequence within that millisecond, then randomness. A batch creates many jobs in one
+ * millisecond; the sequence keeps them in creation order without moving the time part
+ * ahead of the wall clock, so ids of different processes stay comparable.
  */
 export function newId(prefix) {
-  const time = Math.max(Date.now(), lastIdTime + 1)
+  let time = Date.now()
+  if (time <= lastIdTime) {
+    time = lastIdTime
+    idSeq++
+    // 1296 ids in one millisecond: borrow the next one (never happens in practice).
+    if (idSeq >= 36 * 36) {
+      time++
+      idSeq = 0
+    }
+  } else {
+    idSeq = 0
+  }
   lastIdTime = time
-  const rand = [...randomBytes(4)].map((b) => B36[b % 36]).join('')
-  return `${prefix}-${time.toString(36)}${rand}`
+  const seq = B36[Math.floor(idSeq / 36)] + B36[idSeq % 36]
+  const rand = [...randomBytes(3)].map((b) => B36[b % 36]).join('')
+  return `${prefix}-${time.toString(36)}${seq}${rand}`
 }
 
 /** Parse `90s`, `20m`, `1.5h` or bare seconds into seconds. */

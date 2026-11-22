@@ -250,6 +250,15 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.deepEqual(w.dshLog(), [], 'no headless worker for a task that may already run in the UI')
   }, webWorld))
 
+  test('a malformed answer to a prompt the UI may have queued is not run again headless', inSandbox(async (w) => {
+    w.fake.faults.set('session/prompt', 'malformed')
+    const r = await w.run(['run', '-C', join(w.ws, 'malformed'), '-w', '--json', 'Malformed answer'])
+    assert.equal(r.code, 1, r.out + r.err)
+    assert.equal(r.json.job.backend, 'web')
+    assert.match(r.json.job.error, /malformed answer/)
+    assert.deepEqual(w.dshLog(), [], 'no headless worker for a task that may already run in the UI')
+  }, webWorld))
+
   test('a prompt the UI rejected runs headless instead (auto backend)', inSandbox(async (w) => {
     w.fake.faults.set('session/prompt', 'reject')
     const r = await w.run(['run', '-C', join(w.ws, 'rejected'), '-w', '--json', 'Rejected prompt'])

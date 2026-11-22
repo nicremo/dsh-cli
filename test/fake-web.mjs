@@ -21,6 +21,7 @@
 //   { delayMs }  answer late (the call is recorded and executed at once)
 //   'drop'       execute the call, then cut the connection without an answer
 //   'reject'     answer with an error and do nothing
+//   'malformed'  execute the call, then answer HTTP 200 with an empty object
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { basename } from 'node:path'
@@ -201,6 +202,10 @@ export async function startFakeWeb({ cursorContract = 'legacy' } = {}) {
         result = { ok: false, error: { code: error.code ?? 'internal', message: error.message } }
       }
       if (fault === 'drop') return res.destroy()
+      if (fault === 'malformed') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return res.end('{}')
+      }
       const answer = () => {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ type: 'server-response', rpcId: msg.rpcId, result }))

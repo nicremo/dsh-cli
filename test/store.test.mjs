@@ -58,7 +58,7 @@ test('expandHome expands only a leading ~ segment, with either slash', () => {
 
 test('newId: prefixed, and an id of a later millisecond sorts after an earlier one', (t) => {
   // No uniqueness claim: ids of one millisecond differ only in four random characters.
-  for (let i = 0; i < 50; i++) assert.match(util.newId('j'), /^j-[0-9a-z]{12}$/)
+  for (let i = 0; i < 50; i++) assert.match(util.newId('j'), /^j-[0-9a-z]{13}$/)
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') })
   const early = util.newId('b')
   t.mock.timers.tick(1)
@@ -100,6 +100,19 @@ test('issue #9: "last" is the job created last, also when ids share a millisecon
     const job = store.createJob({ prompt: `job ${i}`, cwd: dirs.root })
     assert.equal(store.resolveRef('last').id, job.id, `after creating job ${i}`)
   }
+})
+
+test('ids never run ahead of the wall clock, so ids of different processes stay comparable', (t) => {
+  // Later than every id this process made so far (the clock must not run backwards).
+  const T = Date.now() + 86_400_000
+  t.mock.timers.enable({ apis: ['Date'], now: T })
+  const burst = Array.from({ length: 40 }, () => util.newId('j'))
+  assert.deepEqual([...burst].sort(), burst, 'a burst in one millisecond keeps its order')
+  t.mock.timers.setTime(T + 1)
+  // What any process creates one millisecond later must sort after the whole burst.
+  const next = util.newId('j')
+  assert.equal(next.slice(2, 2 + (T + 1).toString(36).length), (T + 1).toString(36), 'time part is the wall clock')
+  assert.ok(burst.every((id) => id < next))
 })
 
 test('"last" follows the creation time, not an id clock that ran ahead in another process', () => {

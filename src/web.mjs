@@ -122,9 +122,21 @@ export async function call(method, args, { retryAuth = true } = {}) {
     return call(method, args, { retryAuth: false })
   }
   if (res.status !== 200) throw new DshoError(`DSH web ${method}: HTTP ${res.status}`, 5)
-  const body = await res.json()
-  if (!body?.result?.ok) throw new WebError(method, body?.result?.error)
-  return body.result.value
+  let body
+  try {
+    body = await res.json()
+  } catch {
+    body = null
+  }
+  const result = body?.result
+  // Only a well-formed answer counts: { ok: true, value } or { ok: false, error: { ... } }.
+  // Anything else says nothing about whether the server acted on the call, so it is not
+  // a WebError (which callers may treat as a confirmed rejection).
+  if (typeof result?.ok !== 'boolean' || (!result.ok && (typeof result.error !== 'object' || result.error === null))) {
+    throw new DshoError(`DSH web ${method}: malformed answer`, 1)
+  }
+  if (!result.ok) throw new WebError(method, result.error)
+  return result.value
 }
 
 /** True when the DSH web server answers an authenticated request. */
