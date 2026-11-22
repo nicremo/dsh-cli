@@ -240,6 +240,38 @@ describe('web backend', { concurrency: 6 }, () => {
     assert.equal(readFileSync(join(w.home, 'jobs', r.json.job.id, 'result.md'), 'utf8'), 'WEB-RESULT: Mine INTRUDER')
   }, webWorld))
 
+  test('a prompt whose answer was lost is not run again headless (it may be running in the UI)', inSandbox(async (w) => {
+    w.fake.faults.set('session/prompt', 'drop')
+    const r = await w.run(['run', '-C', join(w.ws, 'lost-answer'), '-w', '--json', 'Lost answer'])
+    assert.equal(r.code, 1, r.out + r.err)
+    assert.equal(r.json.job.status, 'failed')
+    assert.equal(r.json.job.backend, 'web')
+    assert.equal(w.fake.calls.filter((c) => c.method === 'session/prompt').length, 1)
+    assert.deepEqual(w.dshLog(), [], 'no headless worker for a task that may already run in the UI')
+  }, webWorld))
+
+  test('a prompt the UI rejected runs headless instead (auto backend)', inSandbox(async (w) => {
+    w.fake.faults.set('session/prompt', 'reject')
+    const r = await w.run(['run', '-C', join(w.ws, 'rejected'), '-w', '--json', 'Rejected prompt'])
+    assert.equal(r.code, 0, r.out + r.err)
+    assert.equal(r.json.job.backend, 'headless')
+    assert.equal(r.json.result, 'FAKE-RESULT: Rejected prompt')
+    assert.match(w.jobFile(r.json.job.id).fallbackFrom.error, /fake rejected session\/prompt/)
+  }, webWorld))
+
+  test('SIGTERM while the web job is still being set up cancels it before the task is sent', { skip: IS_WINDOWS && 'Windows cannot deliver SIGTERM to a handler' }, inSandbox(async (w) => {
+    w.fake.faults.set('session/create', { delayMs: 1500 })
+    const start = await w.run(['run', '-C', join(w.ws, 'setup-stop'), '--json', 'Never sent'])
+    const id = start.json.job.id
+    await until(() => w.fake.calls.some((c) => c.method === 'session/create'), { what: 'the session to be requested' })
+    const { ownerPid } = w.jobFile(id)
+    process.kill(ownerPid, 'SIGTERM')
+    await until(() => !pidAlive(ownerPid), { timeoutMs: 8000, what: 'the runner to exit' })
+    assert.equal(w.jobFile(id).status, 'cancelled')
+    assert.equal(w.fake.calls.filter((c) => c.method === 'session/prompt').length, 0, 'the task never reached the UI')
+    assert.deepEqual(w.dshLog(), [], 'and it did not run headless either')
+  }, webWorld))
+
   test('issue #6: SIGTERM to the runner of a web job cancels the turn on the server', { skip: IS_WINDOWS && 'Windows cannot deliver SIGTERM to a handler' }, inSandbox(async (w) => {
     const start = await w.run(['run', '-C', join(w.ws, 'term'), '--json', 'Long SLEEP 30'])
     const id = start.json.job.id

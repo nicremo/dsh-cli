@@ -142,13 +142,17 @@ export function resolveRef(ref) {
   const r = String(ref).replace(/^@/, '')
   const jobIds = listIds(jobsDir())
   const batchIds = listIds(batchesDir())
+  // Newest by creation time, then by id: ids alone are only ordered within one process
+  // (a burst of jobs can push a process's id clock ahead of another process's).
   if (r === 'last') {
-    if (!jobIds.length) throw new DshoError('No jobs yet', 3)
-    return { kind: 'job', id: jobIds[0] }
+    const newest = listJobs({ limit: 1 })[0]
+    if (!newest) throw new DshoError('No jobs yet', 3)
+    return { kind: 'job', id: newest.id }
   }
   if (r === 'last-batch' || r === 'lastb') {
-    if (!batchIds.length) throw new DshoError('No batches yet', 3)
-    return { kind: 'batch', id: batchIds[0] }
+    const newest = listBatches({ limit: 1 })[0]
+    if (!newest) throw new DshoError('No batches yet', 3)
+    return { kind: 'batch', id: newest.id }
   }
   if (jobIds.includes(r)) return { kind: 'job', id: r }
   if (batchIds.includes(r)) return { kind: 'batch', id: r }

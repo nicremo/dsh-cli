@@ -79,7 +79,8 @@ route and the default model for every job.
 ## Sandbox
 Headless workers never wait for approvals: actions their sandbox forbids are rejected.
 --access read-only (research), workspace-write (writes files in the workspace) or full
-picks the sandbox per job; --access implies the headless backend.
+picks the sandbox per job; --access implies the headless backend. The presets limit
+writes only: workers can still read the user's files and use the network.
 
 ## References
 last = newest job, last-batch = newest batch, unique id prefixes, job or batch names.

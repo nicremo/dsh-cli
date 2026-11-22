@@ -30,7 +30,7 @@ dsh-cli is **agent first**. Every command is non-interactive, returns at once, p
 - **Material gathering**: `dsho materials "brief"` runs one worker per kind (screenshots, scroll videos, news articles, stock footage, stock photos) with a `manifest.json` that records source and licence for every file.
 - **Live in the DSH web UI**: when `dsh web` is running, every job is a real session in that UI. A batch becomes its own workspace, every session gets a readable title, and you can watch or step in.
 - **Headless fallback**: without the UI, each job runs in its own headless dsh process with a lean profile (`orchestra`) that reuses your research MCP servers. If the UI fails before a job is sent, an auto-selected job runs headless instead.
-- **Sandboxed, never stuck**: headless workers never wait for an approval nobody gives (such actions are rejected and the model works around them), and `--access read-only|workspace-write|full` picks the dsh sandbox per job.
+- **Sandboxed, never stuck**: headless workers never wait for an approval nobody gives (such actions are rejected and the model works around them), and `--access read-only|workspace-write|full` picks the dsh write sandbox per job.
 - **Steer like a human would**: `wait`, `status`, `logs -f`, `result`, `files`, `continue` (same session, same folder), `cancel`.
 - **Deterministic captures**: `dsho capture shot|scroll <url>` takes clean screenshots and smooth 1080p scroll videos with Playwright (cookie banners dismissed, overlays hidden, ad networks blocked, watchdog for hanging pages).
 - **No daemon**: state is plain JSON in `~/.dsho/`; detached runner processes keep jobs alive after the calling shell exits.
@@ -215,7 +215,7 @@ Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh 
 
 ## Safety
 
-dsh workers can run shell commands. Headless workers never wait for approvals: whatever the sandbox does not allow is rejected. `--access read-only` (research) or `--access workspace-write` keeps them inside the workspace; `--access full` removes the sandbox. Keep tasks scoped to the workspace and never delegate deletes, deploys, git pushes or anything that touches secrets. Material found by workers is not automatically yours to publish: check licence and source in `manifest.json`. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+dsh workers can run shell commands. Headless workers never wait for approvals: whatever the sandbox does not allow is rejected. The presets limit **writes**, not reads or network access: `--access read-only` forbids writing, `--access workspace-write` allows writes in the workspace plus dsh's temporary and configured writable folders, `--access full` removes the sandbox. A worker can still read files your user account can read (including secrets outside the workspace) and send data over the network, so run dsh-cli only with tasks and sources you trust. Keep tasks scoped to the workspace and never delegate deletes, deploys, git pushes or anything that touches secrets. Material found by workers is not automatically yours to publish: check licence and source in `manifest.json`. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## Development
 

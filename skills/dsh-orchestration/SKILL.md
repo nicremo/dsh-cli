@@ -115,7 +115,8 @@ route and default model for all jobs (check them with `dsho config`).
 
 - Headless workers never wait for approvals; what their sandbox forbids is rejected. Use
   `--access read-only` for pure research, `--access workspace-write` for anything that writes
-  files, `--access full` only when a task really needs it. Keep tasks scoped to the workspace;
+  files, `--access full` only when a task really needs it. The presets limit writes only:
+  workers can still read the user's files and use the network. Keep tasks scoped to the workspace;
   never delegate deletes, deploys, git pushes or anything touching secrets.
 - Works on macOS, Linux and Windows. On Windows run `dsho` from PowerShell or cmd.
 - Workers cannot use the user's logged-in browser sessions. Paywalls stay paywalls.

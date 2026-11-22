@@ -3,7 +3,7 @@
 // profile (default: web) and a small curated skill set, which keeps the worker
 // prompt smaller, faster and cheaper than the full skill pool.
 import { spawnSync } from 'node:child_process'
-import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import yaml from 'js-yaml'
 import { cfg } from './config.mjs'
@@ -108,6 +108,10 @@ function isManagedLink(path) {
   }
 }
 
+/** Marker file inside a skill folder that dsh-cli copied because it could not link it. */
+const COPY_MARKER = '.dsho-copy'
+const isManagedCopy = (path) => existsSync(join(path, COPY_MARKER))
+
 /** Remove a link without touching what it points to (never recursive). */
 function removeLink(path) {
   try {
@@ -115,6 +119,30 @@ function removeLink(path) {
   } catch {
     rmdirSync(path) // Windows directory junctions
   }
+}
+
+/** Remove a skill entry dsh-cli made: a link, or a copy carrying the marker. */
+function removeManaged(path) {
+  if (isManagedLink(path)) removeLink(path)
+  else if (isManagedCopy(path)) rmSync(path, { recursive: true, force: true })
+}
+
+/**
+ * Link one skill into the curated folder. A junction needs no admin rights on Windows but
+ * cannot point to a network share; there (or wherever linking fails) the skill is copied
+ * and marked, so a later setup can refresh or remove the copy.
+ */
+function placeSkill(source, target) {
+  try {
+    symlinkSync(source, target, 'junction')
+    if (existsSync(join(target, 'SKILL.md')) || !existsSync(join(source, 'SKILL.md'))) return 'linked'
+    removeLink(target) // a junction that does not resolve (remote target)
+  } catch {
+    // Fall through to a copy.
+  }
+  cpSync(source, target, { recursive: true })
+  writeFileSync(join(target, COPY_MARKER), `copied by dsh-cli from ${source}\n`)
+  return 'copied'
 }
 
 /**
@@ -128,7 +156,7 @@ function linkSkills(names) {
   const wanted = new Set(names)
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry)
-    if (!wanted.has(entry) && isManagedLink(path)) removeLink(path)
+    if (!wanted.has(entry)) removeManaged(path)
   }
   const linked = []
   for (const name of names) {
@@ -142,7 +170,12 @@ function linkSkills(names) {
     } catch {
       // Missing link.
     }
-    if (!present) symlinkSync(source, target, 'junction') // Windows: no admin rights needed
+    // A copy can be stale: refresh it from the pool on every setup.
+    if (present && isManagedCopy(target)) {
+      rmSync(target, { recursive: true, force: true })
+      present = false
+    }
+    if (!present) placeSkill(source, target)
     linked.push(name)
   }
   return { dir, linked }

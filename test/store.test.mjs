@@ -101,3 +101,13 @@ test('issue #9: "last" is the job created last, also when ids share a millisecon
     assert.equal(store.resolveRef('last').id, job.id, `after creating job ${i}`)
   }
 })
+
+test('"last" follows the creation time, not an id clock that ran ahead in another process', () => {
+  const newer = store.createJob({ prompt: 'newer', cwd: dirs.root })
+  // Another dsho process wrote this job earlier, but its id clock had run ahead during
+  // a burst of job creation, so its id sorts above the newer one.
+  const ahead = `j-${'z'.repeat(12)}`
+  util.writeJsonAtomic(join(dirs.home, 'jobs', ahead, 'job.json'), { ...newer, id: ahead, prompt: 'older, id ahead', createdAt: '2000-01-01T00:00:00.000Z' })
+  assert.ok(ahead > newer.id, 'precondition: the older job has the higher id')
+  assert.equal(store.resolveRef('last').id, newer.id)
+})

@@ -12,8 +12,9 @@ CI covers Ubuntu, macOS and Windows on Node 22 and 24. The test suite was rewrit
 critical review: 104 tests through the CLI process, the dsh boundary and pure helpers.
 
 ### Added
+
 - Windows support (thanks to @apohl23-oss, #11): `dshBin` can be a `.cmd` shim (npm or the DeepSeek Harness desktop app); `which` tries `.exe`/`.cmd`/`.bat`; workers run without console windows; `cancel` ends the whole process tree through `System32\taskkill.exe`; skills are linked with junctions (no admin rights) and copied where a junction cannot reach. `dsho capture` stops hanging pages with `taskkill`, finds `python`/`py`, and prints UTF-8 on every console; `~\` paths expand like `~/`.
-- `--access read-only|workspace-write|full` (config key `access`) picks the dsh sandbox for headless workers. Workers always run with `--approval-policy never`, so they no longer stall on approval prompts: actions the sandbox forbids are rejected and the model is told so (#1).
+- `--access read-only|workspace-write|full` (config key `access`) picks the dsh write sandbox for headless workers (it limits writes, not reads or network access). Workers always run with `--approval-policy never`, so they no longer stall on approval prompts: actions the sandbox forbids are rejected and the model is told so (#1).
 - An auto-selected web job falls back to headless when the DSH web UI fails before the task is sent.
 - `continue --access` changes the sandbox for a follow-up; without it the job's sandbox carries over.
 - `doctor` lists the names (never values) of the model API keys it finds, checks that the profile loads the credentials store, and on Windows warns when dsh was installed into an MSIX app's private storage (for example from inside the Claude desktop app).
@@ -24,6 +25,7 @@ critical review: 104 tests through the CLI process, the dsh boundary and pure he
 - CI runs on Windows too; `.gitattributes` keeps LF line endings in every checkout.
 
 ### Fixed
+
 - Web backend with dsh 0.2.2: the session cursor comes from the structured history API instead of an error message, which blocked every web job (#3).
 - dsh 0.2.2 error reasons (`reason.error.code/message`) show up in `status`, `logs` and `result` instead of a bare "error"; an error turn's empty answer no longer hides the error.
 - A later turn in the same web session can no longer overwrite an earlier job's `result.md` (#5).
@@ -37,11 +39,16 @@ critical review: 104 tests through the CLI process, the dsh boundary and pure he
 - `wait --timeout 0` returns at once; `ws`, `skill` and `capture` without a subcommand print JSON with `--json`; `run -t` is validated before the workspace is created.
 - `ws init` no longer overwrites an existing `AGENTS.md` (#2).
 - Install instructions: the package is `@nicremo/dsh-cli` (npm rejects the unscoped name `dsh-cli`); `npm install -g github:nicremo/dsh-cli` installs the unreleased state (#4).
+- Web jobs: a stop during workspace or session setup cancels the job before its task is sent; one `session/cancel` per turn; no headless fallback once a prompt may have reached the UI (a lost answer would have run the task twice).
+- Workspaces are stored with their canonical path (macOS `/private/var`, Windows long names), the spelling dsh and the web UI use.
+- A tree kill (taskkill /T, logoff, crash) leaves the job `lost` instead of reporting a dsh failure; `last` and `last-batch` follow the creation time across processes.
+- `setup` copies a curated skill it cannot link (Windows junctions cannot reach network shares) and keeps the copy up to date.
 - `npm test` runs on Windows (cmd.exe kept the single quotes of the test glob and ran no tests) (#11).
 
 ## [0.1.0] - 2026-10-07
 
 ### Added
+
 - `run`, `batch`, `research` and `materials` to start DeepSeek Harness jobs in workspace folders, alone or as parallel batches.
 - Web backend: jobs run as sessions inside a running DSH web UI (one workspace per batch, named sessions), with `ui start`, `ui login` and `ui`.
 - Headless backend with the `orchestra` profile created by `setup` (research MCP servers copied from another profile, curated skills).

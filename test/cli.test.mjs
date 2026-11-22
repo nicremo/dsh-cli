@@ -82,8 +82,11 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     const dir = join(s.ws, 'two')
     const start = await s.run(['run', '-C', dir, '--json', 'Write a file WRITE note.txt SLEEP 0.3'])
     assert.equal(start.code, 0, start.err)
-    assert.ok(['queued', 'running'].includes(start.json.job.status), start.json.job.status)
-    assert.equal(start.json.job.resultFile, null)
+    // A slow machine may pause the launching CLI until the short task has finished.
+    const started = start.json.job.status
+    assert.ok(['queued', 'running', 'done'].includes(started), started)
+    if (started === 'done') assert.ok(start.json.job.resultFile, 'a finished job has its result file')
+    else assert.equal(start.json.job.resultFile, null)
     const id = start.json.job.id
 
     const wait = await s.run(['wait', id, '--timeout', '30s', '--json'])
@@ -249,7 +252,10 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     assert.equal(r.code, 4)
     assert.equal(r.json.timedOut, true)
     assert.equal(r.json.result, null)
-    assert.equal((await s.run(['status', r.json.job.id, '--json'])).json.job.status, 'running')
+    // The job keeps going: still queued when its runner was slow to start, else running.
+    const left = (await s.run(['status', r.json.job.id, '--json'])).json.job.status
+    assert.ok(['queued', 'running'].includes(left), left)
+    await s.run(['cancel', r.json.job.id])
   }))
 
   test('wait --any returns as soon as the first job is finished', inSandbox(async (s) => {

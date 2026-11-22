@@ -57,7 +57,7 @@ A web job calls:
 5. Polling: the newest event sequence number is the `cursor` of `session/page { address }` without `throughSeq` (dsh 0.2.2+; older servers named it in the error for an out-of-range `throughSeq`, which stays as a fallback), then `session/page { address, throughSeq, beforeSeq }` returns the new events. The user message whose `source.rpcId` equals the request id marks the start of our turn; events are translated up to and including the next `turn/end`, which ends the job, so later turns in the same session never reach it.
 6. `session/cancel { sessionId }` for cancellation and time limits.
 
-Durable session events (`assistant/message`, `tool/call`, `tool/result`, `step/end`, `turn/end`) are translated into the headless vocabulary (`text`, `tool_call`, `tool_result`, `status`, `final`), so `logs`, `status` and `result` do not care which backend ran a job. Turn end reasons carry `code` and `message` directly (dsh up to 0.2.1) or under `reason.error` (0.2.2); both are understood.
+Durable session events (`assistant/message`, `tool/call`, `tool/result`, `step/end`, `turn/end`) are translated into the headless vocabulary (`text`, `tool_call`, `tool_result`, `status`, `final`), so `logs`, `status` and `result` do not care which backend ran a job. Turn-end reasons carry `code` and `message` directly (dsh up to 0.2.1) or under `reason.error` (0.2.2); both are understood.
 
 Streaming methods such as `session/follow` need the UI's WebSocket carrier, which is why dsh-cli polls.
 
@@ -73,4 +73,4 @@ Streaming methods such as `session/follow` need the UI's WebSocket carrier, whic
 - **The dsh boundary**: `test/fake-dsh.mjs` stands in for headless dsh (markers in the task like `SLEEP 5`, `FAIL`, `CRASH`, `WRITE file`, `IGNORE-SIGTERM`; it logs argv, cwd and env of every start) and `test/fake-web.mjs` for the DSH web UI HTTP API, with both the structured (0.2.2+) and the legacy `session/page` cursor contract (`DSHO_TEST_WEB_CONTRACT=legacy` switches the default).
 - **Pure helpers** with non-trivial logic: `events.test.mjs`, `dsh.test.mjs`, `store.test.mjs`, `profile.test.mjs`, `windows.test.mjs`, `skills.test.mjs`.
 
-`test/helpers.mjs` gives every test its own sandbox: private `DSHO_HOME`, `DSH_HOME`, home directory (`HOME` and `USERPROFILE`), agent skill folders and workspaces, removed afterwards. No test reaches the real `~/.dsho`, `~/.dsh`, `~/.agents`, `~/.claude` or a real DSH installation. Waiting is done by polling for a condition with a deadline, never by fixed sleeps.
+`test/helpers.mjs` gives every test its own sandbox: private `DSHO_HOME`, `DSH_HOME`, home directory (`HOME` and `USERPROFILE`), agent skill folders and workspaces, removed afterward. No test reaches the real `~/.dsho`, `~/.dsh`, `~/.agents`, `~/.claude` or a real DSH installation. Waiting is done by polling for a condition with a deadline, never by fixed sleeps.

@@ -16,6 +16,11 @@
 //   TOOLS <n>   n bash tool calls, committed at once (more events than one page holds)
 //   INTRUDER    another client's prompt is queued behind this turn and its whole turn
 //               commits in the same instant this turn ends
+//
+// fake.faults.set(method, fault) disturbs one Remote method:
+//   { delayMs }  answer late (the call is recorded and executed at once)
+//   'drop'       execute the call, then cut the connection without an answer
+//   'reject'     answer with an error and do nothing
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { basename } from 'node:path'
@@ -25,6 +30,7 @@ export const TOKEN = 'T'
 export async function startFakeWeb({ cursorContract = 'legacy' } = {}) {
   if (!['legacy', 'structured'].includes(cursorContract)) throw new Error(`unknown cursorContract ${cursorContract}`)
   const calls = []
+  const faults = new Map()
   const workspaces = new Map()
   const sessions = new Map()
   const timers = new Set()
@@ -185,15 +191,22 @@ export async function startFakeWeb({ cursorContract = 'legacy' } = {}) {
       }
       const msg = JSON.parse(raw)
       calls.push({ method: msg.method, path: req.url, type: msg.type, args: msg.payload.args })
+      const fault = faults.get(msg.method)
       let result
       try {
+        if (fault === 'reject') throw { code: 'gateway/unavailable', message: `fake rejected ${msg.method}` }
         if (!handlers[msg.method]) throw { code: 'gateway/not-found', message: `unknown method ${msg.method}` }
         result = { ok: true, value: handlers[msg.method](msg.payload.args) }
       } catch (error) {
         result = { ok: false, error: { code: error.code ?? 'internal', message: error.message } }
       }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId: msg.rpcId, result }))
+      if (fault === 'drop') return res.destroy()
+      const answer = () => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: msg.rpcId, result }))
+      }
+      if (fault?.delayMs) later(fault.delayMs, answer)
+      else answer()
     })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -203,6 +216,7 @@ export async function startFakeWeb({ cursorContract = 'legacy' } = {}) {
     base,
     tokenUrl: `${base}/?token=${TOKEN}`,
     calls,
+    faults,
     workspaces,
     sessions,
     /** Calls that name the given session, in order. */

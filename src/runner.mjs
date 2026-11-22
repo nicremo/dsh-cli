@@ -278,6 +278,9 @@ function finishState(state, { cancelled, timedOut, job, extraError }) {
   return { status, error }
 }
 
+/** Thrown when a web job is cancelled before its task was submitted. */
+class CancelledBeforePrompt extends Error {}
+
 /** Sessions this process has already asked to cancel, with the pending request. */
 const cancelRequests = new Map()
 
@@ -344,12 +347,18 @@ async function runWeb(id) {
   let cancelled = false
   let timedOut = false
   let extraError = null
-  let promptSent = false
+  // 'none' before session/prompt, 'pending' while it is in flight, 'sent' once confirmed,
+  // 'rejected' when the server answered with an error. Only 'none' and 'rejected' are safe
+  // to retry headless: a lost answer to a delivered prompt would run the task twice.
+  let prompt = 'none'
   let sessionId = job.resume ?? null
+  // Registered before the first await, so SIGTERM during setup reaches this job too.
+  activeWebJobs.set(id, sessionId)
   try {
     if (!sessionId) {
       const workspace = await web.ensureWorkspace(job.cwd)
       sessionId = (await web.createSession(workspace.workspaceId)).sessionId
+      activeWebJobs.set(id, sessionId)
       updateJob(id, { sessionId, web: { workspaceId: workspace.workspaceId, workspaceTitle: workspace.title, baseUrl: web.baseUrl() } })
       if (job.title) {
         try {
@@ -366,9 +375,17 @@ async function runWeb(id) {
     }
     let lastSeq = await web.cursor(sessionId)
     record([{ type: 'session', sessionId, cwd: job.cwd }])
-    activeWebJobs.set(id, sessionId)
-    const requestId = await web.prompt(sessionId, readTask(id))
-    promptSent = true
+    // Cancelled during setup: never submit the task.
+    if (existsSync(cancelMarker(id))) throw new CancelledBeforePrompt()
+    prompt = 'pending'
+    let requestId
+    try {
+      requestId = await web.prompt(sessionId, readTask(id))
+    } catch (err) {
+      if (err instanceof web.WebError) prompt = 'rejected'
+      throw err
+    }
+    prompt = 'sent'
     const deadline = Date.now() + (job.timeoutSec ?? 1800) * 1000
     let mySeq = null
     let outageSince = null
@@ -409,12 +426,14 @@ async function runWeb(id) {
       if (end >= 0) break
     }
   } catch (err) {
-    extraError = err.message
+    if (err instanceof CancelledBeforePrompt) cancelled = true
+    else extraError = err.message
   } finally {
     activeWebJobs.delete(id)
   }
 
-  if (!promptSent && !cancelled && extraError && job.backendChoice === 'auto' && !job.resume) {
+  const safeToRetry = prompt === 'none' || prompt === 'rejected'
+  if (safeToRetry && !cancelled && extraError && job.backendChoice === 'auto' && !job.resume) {
     return { job: readJobRaw(id), fallback: extraError }
   }
   const { status, error } = finishState(state, { cancelled, timedOut, job, extraError })
@@ -459,7 +478,8 @@ export function installSignalForwarding({ batchId } = {}) {
     if (batchId) mark(batchCancelMarker(batchId))
     for (const id of [...activeChildren.keys(), ...activeWebJobs.keys()]) mark(cancelMarker(id))
     for (const child of activeChildren.values()) killGroup(child.pid, 'SIGTERM')
-    for (const sessionId of activeWebJobs.values()) cancelWebTurn(sessionId).catch(() => {})
+    // A job still in setup has no session yet: its marker stops it before the prompt.
+    for (const sessionId of activeWebJobs.values()) if (sessionId) cancelWebTurn(sessionId).catch(() => {})
     const hard = setTimeout(() => {
       for (const child of activeChildren.values()) {
         if (child.exitCode === null && child.signalCode === null) killGroup(child.pid, 'SIGKILL')
