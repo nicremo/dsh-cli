@@ -1,92 +1,103 @@
-import { test, before } from 'node:test'
+// Pure helpers behind the CLI (durations, slugs, ids, batch status) plus the one
+// store behaviour that needs a frozen clock. Everything else about stored jobs
+// is tested through the CLI in cli.test.mjs and batch.test.mjs.
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { deadPid, isolateProcess } from './helpers.mjs'
 
-before(() => {
-  process.env.DSHO_HOME = mkdtempSync(join(tmpdir(), 'dsho-store-'))
-})
-
+const dirs = isolateProcess()
 const util = await import('../src/util.mjs')
 const store = await import('../src/store.mjs')
 
-test('newId has prefix and is unique', () => {
-  const ids = new Set(Array.from({ length: 500 }, () => util.newId('j')))
-  assert.equal(ids.size, 500)
-  for (const id of ids) assert.match(id, /^j-[0-9a-z]{10,}$/)
-})
-
-test('parseDuration accepts s, m, h and bare seconds', () => {
+test('parseDuration reads s, m, h, fractions and bare seconds; anything else is a usage error', () => {
   assert.equal(util.parseDuration('90s'), 90)
   assert.equal(util.parseDuration('20m'), 1200)
   assert.equal(util.parseDuration('1h'), 3600)
   assert.equal(util.parseDuration('1.5h'), 5400)
   assert.equal(util.parseDuration('300'), 300)
-  assert.throws(() => util.parseDuration('soon'), /duration/)
+  assert.equal(util.parseDuration(' 2 M '), 120)
+  assert.equal(util.parseDuration('0'), 0)
+  for (const bad of ['soon', '', '-5', '5d', '1h30m', 'm']) {
+    assert.throws(() => util.parseDuration(bad), (e) => e.code === 2 && /Invalid duration/.test(e.message), `"${bad}"`)
+  }
 })
 
-test('slug keeps umlauts, drops punctuation, limits length', () => {
+test('slug keeps letters of every script, drops punctuation, limits length, never ends on a dash', () => {
   assert.equal(util.slug('Größte KI-Trends 2026: Überblick!'), 'größte-ki-trends-2026-überblick')
+  assert.equal(util.slug('日本語 のテスト'), '日本語-のテスト')
   assert.equal(util.slug('a'.repeat(100), 10), 'aaaaaaaaaa')
+  assert.equal(util.slug('abc def ghi', 8), 'abc-def')
+  assert.equal(util.slug('  --Hello--  '), 'hello')
   assert.equal(util.slug('???'), 'task')
+  assert.equal(util.slug('../../etc/passwd'), 'etc-passwd')
 })
 
-test('writeJsonAtomic and readJson roundtrip', () => {
-  const file = join(process.env.DSHO_HOME, 'x', 'a.json')
-  util.writeJsonAtomic(file, { a: 1 })
-  assert.deepEqual(util.readJson(file), { a: 1 })
-  assert.equal(util.readJson(join(process.env.DSHO_HOME, 'missing.json'), null), null)
-})
-
-test('pidAlive detects own and dead pids', () => {
-  assert.equal(util.pidAlive(process.pid), true)
-  assert.equal(util.pidAlive(999999), false)
-  assert.equal(util.pidAlive(undefined), false)
-})
-
-test('fmtDuration formats compactly', () => {
+test('fmtDuration and excerpt format compactly', () => {
   assert.equal(util.fmtDuration(45_000), '45s')
   assert.equal(util.fmtDuration(83_000), '1m 23s')
   assert.equal(util.fmtDuration(3_720_000), '1h 02m')
+  assert.equal(util.fmtDuration(0), '0s')
+  assert.equal(util.fmtDuration(null), '-')
+  assert.equal(util.excerpt('one\n  two\tthree'), 'one two three')
+  assert.equal(util.excerpt('abcdefghij', 5), 'abcd…')
+  assert.equal(util.excerpt(null), '')
 })
 
-test('createJob, updateJob, readJob', () => {
-  const job = store.createJob({ prompt: 'hello', cwd: '/tmp' })
-  assert.equal(job.status, 'queued')
-  assert.ok(existsSync(join(process.env.DSHO_HOME, 'jobs', job.id, 'job.json')))
-  store.updateJob(job.id, { status: 'running', ownerPid: process.pid })
-  store.updateJob(job.id, (j) => ({ ...j, progress: { steps: 2 } }))
-  const read = store.readJob(job.id)
-  assert.equal(read.status, 'running')
-  assert.equal(read.progress.steps, 2)
-  assert.equal(JSON.parse(readFileSync(join(process.env.DSHO_HOME, 'jobs', job.id, 'job.json'), 'utf8')).status, 'running')
+test('expandHome expands only a leading ~ segment, with either slash', () => {
+  assert.equal(homedir(), dirs.userHome, 'the test runs in its own home')
+  assert.equal(util.expandHome('~'), dirs.userHome)
+  assert.equal(util.expandHome('~/a/b'), join(dirs.userHome, 'a', 'b'))
+  assert.equal(util.expandHome('~\\a'), join(dirs.userHome, 'a'))
+  assert.equal(util.expandHome('~user/a'), '~user/a')
+  assert.equal(util.expandHome('a/~/b'), 'a/~/b')
+  assert.equal(util.expandHome(null), null)
 })
 
-test('readJob reports lost when the owner died', () => {
-  const job = store.createJob({ prompt: 'x', cwd: '/tmp' })
-  store.updateJob(job.id, { status: 'running', ownerPid: 999999 })
-  assert.equal(store.readJob(job.id).status, 'lost')
+test('newId: prefixed, and an id of a later millisecond sorts after an earlier one', (t) => {
+  // No uniqueness claim: ids of one millisecond differ only in four random characters.
+  for (let i = 0; i < 50; i++) assert.match(util.newId('j'), /^j-[0-9a-z]{12}$/)
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') })
+  const early = util.newId('b')
+  t.mock.timers.tick(1)
+  assert.ok(util.newId('b') > early)
 })
 
-test('resolveRef: exact, prefix, last, name, missing', () => {
-  const a = store.createJob({ prompt: 'a', cwd: '/tmp', name: 'alpha-recherche' })
-  const b = store.createBatch({ name: 'meine-batch', root: '/tmp', parallel: 2, jobs: [a.id] })
-  assert.deepEqual(store.resolveRef(a.id), { kind: 'job', id: a.id })
-  assert.deepEqual(store.resolveRef(a.id.slice(0, -2)), { kind: 'job', id: a.id })
-  assert.deepEqual(store.resolveRef('last'), { kind: 'job', id: a.id })
-  assert.deepEqual(store.resolveRef('last-batch'), { kind: 'batch', id: b.id })
-  assert.deepEqual(store.resolveRef(b.id), { kind: 'batch', id: b.id })
-  assert.deepEqual(store.resolveRef('alpha-recherche'), { kind: 'job', id: a.id })
-  assert.deepEqual(store.resolveRef('meine-batch'), { kind: 'batch', id: b.id })
-  assert.throws(() => store.resolveRef('gibtsnicht'), (e) => e.code === 3)
+test('pidAlive: this process yes, an exited process and nonsense no', () => {
+  assert.equal(util.pidAlive(process.pid), true)
+  assert.equal(util.pidAlive(deadPid()), false)
+  for (const bad of [undefined, null, 0, -1, 1.5, '12']) assert.equal(util.pidAlive(bad), false, String(bad))
 })
 
-test('listJobs filters by batch and sorts newest first', () => {
-  const b = store.createBatch({ name: 'filter', root: '/tmp', parallel: 1, jobs: [] })
-  const j1 = store.createJob({ prompt: '1', cwd: '/tmp', batch: b.id, index: 1 })
-  const j2 = store.createJob({ prompt: '2', cwd: '/tmp', batch: b.id, index: 2 })
-  const list = store.listJobs({ batch: b.id })
-  assert.deepEqual(list.map((j) => j.id).sort(), [j1.id, j2.id].sort())
-  assert.deepEqual(store.listJobs({ batch: b.id, order: 'index' }).map((j) => j.id), [j1.id, j2.id])
+test('writeJsonAtomic replaces the file and leaves no temp files behind', () => {
+  const file = join(dirs.home, 'x', 'a.json')
+  util.writeJsonAtomic(file, { a: 1 })
+  util.writeJsonAtomic(file, { a: 2 })
+  assert.deepEqual(util.readJson(file), { a: 2 })
+  assert.deepEqual(readdirSync(join(dirs.home, 'x')), ['a.json'])
+  assert.equal(util.readJson(join(dirs.home, 'missing.json'), null), null)
+})
+
+test('summarizeJobs folds job states into one batch status', () => {
+  const summary = (...statuses) => store.summarizeJobs(statuses.map((status) => ({ status })))
+  assert.deepEqual(summary(), { status: 'empty', counts: {}, total: 0 })
+  assert.deepEqual(summary('done', 'done'), { status: 'done', counts: { done: 2 }, total: 2 })
+  assert.equal(summary('done', 'queued').status, 'running')
+  assert.equal(summary('failed', 'running').status, 'running')
+  assert.equal(summary('done', 'failed').status, 'partial')
+  assert.equal(summary('done', 'cancelled', 'timeout').status, 'partial')
+  assert.equal(summary('cancelled', 'cancelled').status, 'cancelled')
+  assert.equal(summary('failed', 'timeout', 'lost').status, 'failed')
+  assert.equal(summary('cancelled', 'failed').status, 'failed')
+})
+
+test('issue #9: "last" is the job created last, also when ids share a millisecond', { todo: 'issue #9' }, (t) => {
+  // A frozen clock: every job below is created in the same millisecond, as in a fast batch.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') })
+  for (let i = 1; i <= 12; i++) {
+    const job = store.createJob({ prompt: `job ${i}`, cwd: dirs.root })
+    assert.equal(store.resolveRef('last').id, job.id, `after creating job ${i}`)
+  }
 })
