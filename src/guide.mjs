@@ -76,6 +76,11 @@ Default is the model in ~/.dsh/settings.yaml. Per job or batch: -m pro
 dsho config set provider openrouter / dsho config set model v4-flash set the provider
 route and the default model for every job.
 
+## Sandbox
+Headless workers never wait for approvals: actions their sandbox forbids are rejected.
+--access read-only (research), workspace-write (writes files in the workspace) or full
+picks the sandbox per job; --access implies the headless backend.
+
 ## References
 last = newest job, last-batch = newest batch, unique id prefixes, job or batch names.
 State lives as JSON in ~/.dsho/jobs/<id>/ (job.json, task.md, events.jsonl,

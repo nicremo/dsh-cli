@@ -1,6 +1,6 @@
 ---
 name: dsh-orchestration
-description: Delegates light, parallelizable work to a local DeepSeek Harness (dsh) through the dsh-cli command `dsho`. Use it when several research questions should run in parallel, when material has to be gathered (screenshots of blogs and news articles, scroll videos of websites, stock footage, stock photos), when a task can be done fast and cheap by DeepSeek, when a dsh workspace or session should be started, continued, watched or cancelled, or when a single screenshot or scroll video of a URL is needed. Trigger phrases "DSH", "dsh", "DeepSeek Harness", "DeepSeek", "dsho", "dsh-cli", "via DeepSeek", "research in parallel", "10 research tasks", "batch", "gather material", "screenshots of articles", "scroll video", "screen recording of a website", "stock footage", "b-roll", "/dsh-orchestration".
+description: Delegates light, parallelizable work to a local DeepSeek Harness (dsh) through the dsh-cli command `dsho`. Use it when several research questions should run in parallel, when material has to be gathered (screenshots of blogs and news articles, scroll videos of websites, stock footage, stock photos), when a task can be done fast and cheap by DeepSeek, when a dsh workspace or session should be started, continued, watched or cancelled, or when a single screenshot or scroll video of a URL is needed. Trigger phrases "DSH", "dsh", "DeepSeek Harness", "DeepSeek", "dsho", "dsh-cli", "via DeepSeek", "research in parallel", "10 research tasks", "dsho batch", "gather material", "screenshots of articles", "scroll video", "screen recording of a website", "stock footage", "b-roll", "/dsh-orchestration".
 ---
 
 # dsh-orchestration: DeepSeek Harness as a worker pool
@@ -112,8 +112,11 @@ route and default model for all jobs (check them with `dsho config`).
 
 ## Limits and rules
 
-- dsh often runs with full access and no sandbox. Keep tasks scoped to the workspace; never
-  delegate deletes, deploys, git pushes or anything touching secrets.
+- Headless workers never wait for approvals; what their sandbox forbids is rejected. Use
+  `--access read-only` for pure research, `--access workspace-write` for anything that writes
+  files, `--access full` only when a task really needs it. Keep tasks scoped to the workspace;
+  never delegate deletes, deploys, git pushes or anything touching secrets.
+- Works on macOS, Linux and Windows. On Windows run `dsho` from PowerShell or cmd.
 - Workers cannot use the user's logged-in browser sessions. Paywalls stay paywalls.
 - Headless jobs need about 5 to 10 seconds to start; web UI jobs start at once. Bundle
   tiny tasks instead of starting each alone.
@@ -132,4 +135,6 @@ route and default model for all jobs (check them with `dsho config`).
 | Profile `headless` instead of `orchestra` | Run `dsho setup` |
 | Jobs do not appear in the UI | `dsho doctor`: check web-ui, run `dsho ui start`, start the job again with `-b web` |
 | `continue` says the UI is not reachable | The session lives in the UI: `dsho ui start`, then retry |
-| `dsho capture` says Playwright is missing | `pip install playwright && python3 -m playwright install chromium` |
+| `dsho capture` says Playwright is missing | `python3 -m pip install playwright && python3 -m playwright install chromium` (Windows: `python`) |
+| `MISSING_CREDENTIAL` | The user must store a DeepSeek API key once (DSH UI: Settings → Models). Do not ask for the key in chat. |
+| A worker says an action was rejected | Its sandbox blocked it. Rerun that job with `--access full` only if the task needs it. |
