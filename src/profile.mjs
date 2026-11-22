@@ -3,8 +3,8 @@
 // profile (default: web) and a small curated skill set, which keeps the worker
 // prompt smaller, faster and cheaper than the full skill pool.
 import { spawnSync } from 'node:child_process'
-import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import yaml from 'js-yaml'
 import { cfg } from './config.mjs'
 import { activeProfile, dshCommand, readDshSettings, resolveDsh, which } from './dsh.mjs'
@@ -94,9 +94,40 @@ export function renderPatch({ rows, dump, skillsDir, sourceProfile, entries = []
   return header + '\n' + dump(base)
 }
 
+/** True when `path` is a link (symlink or junction) that dsh-cli made into the skill pool. */
+function isManagedLink(path) {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return false
+    const target = resolve(dirname(path), readlinkSync(path))
+    const pool = resolve(agentsSkillsDir())
+    return target === pool || target.startsWith(pool + sep)
+  } catch {
+    return false
+  }
+}
+
+/** Remove a link without touching what it points to (never recursive). */
+function removeLink(path) {
+  try {
+    unlinkSync(path)
+  } catch {
+    rmdirSync(path) // Windows directory junctions
+  }
+}
+
+/**
+ * Make the curated skill folder match `names`: link what is missing and remove links
+ * of an earlier selection. Only links into the skill pool are removed; anything else a
+ * user put there stays.
+ */
 function linkSkills(names) {
   const dir = curatedSkillsDir()
   mkdirSync(dir, { recursive: true })
+  const wanted = new Set(names)
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry)
+    if (!wanted.has(entry) && isManagedLink(path)) removeLink(path)
+  }
   const linked = []
   for (const name of names) {
     const source = join(agentsSkillsDir(), name)
@@ -220,7 +251,9 @@ export function doctor() {
   }
   const preset = settings?.permission?.defaultPreset ?? 'workspace-write (default)'
   const model = settings?.['agent-default-model']
-  add('permissions', preset === 'danger-full-access', `permission preset ${preset}${preset === 'danger-full-access' ? '' : ': unattended workers may stall on approval prompts'}`, preset !== 'danger-full-access')
+  // Headless workers run with --approval-policy never, so a stricter preset no longer stalls them:
+  // actions outside the sandbox are rejected and the model works around them.
+  add('permissions', true, `permission preset ${preset}; headless workers never wait for approvals (override per job with --access read-only|workspace-write|full)`, true)
   add('model', Boolean(model), model ? `${model.provider}/${model.model}${model.reasoningEffort ? ` (${model.reasoningEffort})` : ''}` : 'no default model in ~/.dsh/settings.yaml (dsh default applies)', true)
   const hasCreds = existsSync(join(dshHome(), '.credentials.yaml')) || Boolean(process.env.DEEPSEEK_API_KEY)
   add('credentials', hasCreds, hasCreds ? 'dsh credentials present' : 'no dsh credentials: log in once through dsh or set DEEPSEEK_API_KEY')
@@ -228,8 +261,9 @@ export function doctor() {
   if (dsh && dsh.kind !== 'custom') {
     const c = dshCommand(['--profile', profile, '--dump-config'])
     const t0 = Date.now()
-    const res = spawnSync(c.cmd, c.args, { env: c.env, cwd: home(), encoding: 'utf8', timeout: 120000 })
-    add('dsh-config', res.status === 0, res.status === 0 ? `profile ${profile} composes in ${Date.now() - t0} ms` : tail(res.stderr))
+    const res = spawnSync(c.cmd, c.args, { env: c.env, cwd: home(), encoding: 'utf8', timeout: 120000, windowsHide: true })
+    const why = tail(res.stderr) || res.error?.message || (res.signal ? `killed by ${res.signal}` : `exit code ${res.status}`)
+    add('dsh-config', res.status === 0, res.status === 0 ? `profile ${profile} composes in ${Date.now() - t0} ms` : why)
   }
 
   const py = findPython()
