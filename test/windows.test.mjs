@@ -1,9 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveCmdShim, spawnSpec, which } from '../src/dsh.mjs'
+import { isolateProcess, tempDir } from './helpers.mjs'
+
+isolateProcess()
+const { resolveCmdShim, spawnSpec, which } = await import('../src/dsh.mjs')
 
 // Real shim shapes, shortened: npm's generated .cmd and the DeepSeek Harness desktop launcher
 const NPM_SHIM = `@ECHO off\r
@@ -28,8 +31,8 @@ set "ELECTRON_RUN_AS_NODE=1"\r
 exit /b %errorlevel%\r
 `
 
-test('resolveCmdShim runs an npm shim script through node', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsho-shim-'))
+test('resolveCmdShim runs an npm shim script through node', (t) => {
+  const dir = tempDir(t)
   writeFileSync(join(dir, 'dsh.cmd'), NPM_SHIM)
   const shim = resolveCmdShim(join(dir, 'dsh.cmd'))
   assert.equal(shim.cmd, process.execPath)
@@ -37,8 +40,8 @@ test('resolveCmdShim runs an npm shim script through node', () => {
   assert.deepEqual(shim.env, {})
 })
 
-test('resolveCmdShim keeps the runtime, flags and env of the desktop launcher', () => {
-  const root = mkdtempSync(join(tmpdir(), 'dsho-desktop-'))
+test('resolveCmdShim keeps the runtime, flags and env of the desktop launcher', (t) => {
+  const root = tempDir(t)
   const bin = join(root, 'resources', 'runtime', 'cli', 'bin')
   mkdirSync(bin, { recursive: true })
   writeFileSync(join(root, 'DeepSeek Harness.exe'), '')
@@ -49,8 +52,8 @@ test('resolveCmdShim keeps the runtime, flags and env of the desktop launcher', 
   assert.deepEqual(shim.env, { ELECTRON_RUN_AS_NODE: '1' })
 })
 
-test('resolveCmdShim returns null for an unknown shim', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsho-shim-'))
+test('resolveCmdShim returns null for an unknown shim', (t) => {
+  const dir = tempDir(t)
   writeFileSync(join(dir, 'dsh.cmd'), '@echo off\r\nsomething.exe %*\r\n')
   assert.equal(resolveCmdShim(join(dir, 'dsh.cmd')), null)
 })
@@ -68,8 +71,8 @@ test('DSHO_DSH_CMD may be a script that runs through node', () => {
   }
 })
 
-test('which finds .cmd shims through PATHEXT on Windows', { skip: process.platform !== 'win32' && 'Windows only' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsho-path-'))
+test('which finds .cmd shims through PATHEXT on Windows', { skip: process.platform !== 'win32' && 'Windows only' }, (t) => {
+  const dir = tempDir(t)
   writeFileSync(join(dir, 'dsh.cmd'), NPM_SHIM)
   const path = process.env.PATH
   process.env.PATH = dir
@@ -80,8 +83,8 @@ test('which finds .cmd shims through PATHEXT on Windows', { skip: process.platfo
   }
 })
 
-test('which prefers .exe over .cmd on Windows', { skip: process.platform !== 'win32' && 'Windows only' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsho-path-'))
+test('which prefers .exe over .cmd on Windows', { skip: process.platform !== 'win32' && 'Windows only' }, (t) => {
+  const dir = tempDir(t)
   writeFileSync(join(dir, 'dsh.cmd'), NPM_SHIM)
   writeFileSync(join(dir, 'dsh.exe'), '')
   const path = process.env.PATH
