@@ -2,7 +2,7 @@
 // dsh home and workspace folders, and an environment that cannot reach the
 // developer's real ~/.dsho, ~/.dsh, ~/.agents or ~/.claude.
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,7 +44,7 @@ export function pidAlive(pid) {
 
 /** A temp folder that is removed when the test ends. */
 export function tempDir(t, prefix = 'dsho-tmp-') {
-  const dir = mkdtempSync(join(tmpdir(), prefix))
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -138,7 +138,7 @@ export function dsho(env, args, { input = '', timeoutMs = 15000 } = {}) {
  * every runner or fake dsh process that is still alive.
  */
 export function sandbox(t, extraEnv = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'dsho-test-'))
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsho-test-')))
   const dirs = { root, userHome: join(root, 'home'), home: join(root, 'dsho'), dshHome: join(root, 'dsh'), ws: join(root, 'ws') }
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
   const fakeLog = join(root, 'fake-dsh.log')
@@ -231,7 +231,7 @@ export function inSandbox(body, world = sandbox) {
  */
 export function isolateProcess() {
   for (const key of Object.keys(process.env)) if (LEAKY.test(key)) delete process.env[key]
-  const root = mkdtempSync(join(tmpdir(), 'dsho-unit-'))
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsho-unit-')))
   const dirs = { root, userHome: join(root, 'home'), home: join(root, 'dsho'), dshHome: join(root, 'dsh') }
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
   Object.assign(process.env, { HOME: dirs.userHome, USERPROFILE: dirs.userHome, DSHO_HOME: dirs.home, DSH_HOME: dirs.dshHome })

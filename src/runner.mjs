@@ -14,6 +14,8 @@ import * as web from './web.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/dsho.mjs', import.meta.url))
 const KILL_GRACE_MS = 5000
+/** Pause before recording a dsh that died mid-turn, so a dying runner leaves the job lost. */
+const ABNORMAL_EXIT_GRACE_MS = 1000
 const CANCEL_POLL_MS = 500
 const PROGRESS_WRITE_MS = 1000
 const WEB_POLL_MS = Number(process.env.DSHO_WEB_POLL_MS || 2000)
@@ -234,6 +236,12 @@ async function runHeadless(id) {
     }
   }
 
+  // dsh died without ending its turn and nobody asked it to stop. Often the whole process
+  // tree is going down (taskkill /T, logoff, a crash), and Windows may end the child a
+  // moment before this runner. Give that a moment: if the runner dies too, the job is
+  // reported as lost instead of as a dsh failure. A real dsh failure is recorded right after.
+  if (state.turnEnd == null && !timedOut && !stopping && !existsSync(cancelMarker(id))) await sleep(ABNORMAL_EXIT_GRACE_MS)
+
   let status
   if (existsSync(cancelMarker(id))) status = 'cancelled'
   else if (timedOut) status = 'timeout'
@@ -268,6 +276,24 @@ function finishState(state, { cancelled, timedOut, job, extraError }) {
   if (status === 'timeout') error = `timed out after ${job.timeoutSec}s`
   else if (status === 'failed') error = extraError || state.error || 'turn ended without completing'
   return { status, error }
+}
+
+/** Sessions this process has already asked to cancel, with the pending request. */
+const cancelRequests = new Map()
+
+/**
+ * Cancel a web turn once. The signal handler and the job's own poll loop (which then
+ * sees the cancel marker) both want to stop the turn; the server gets one request.
+ */
+function cancelWebTurn(sessionId) {
+  if (!cancelRequests.has(sessionId)) {
+    const request = web.cancelSession(sessionId).catch((err) => {
+      cancelRequests.delete(sessionId) // a failed request may be tried again
+      throw err
+    })
+    cancelRequests.set(sessionId, request)
+  }
+  return cancelRequests.get(sessionId)
 }
 
 /** Sleep up to `ms`, waking early when the job gets a cancel marker. */
@@ -354,7 +380,7 @@ async function runWeb(id) {
         else timedOut = true
         stopRequestedAt = Date.now()
         try {
-          await web.cancelSession(sessionId)
+          await cancelWebTurn(sessionId)
         } catch {
           // The turn may already be over; the poll below settles it.
         }
@@ -433,7 +459,7 @@ export function installSignalForwarding({ batchId } = {}) {
     if (batchId) mark(batchCancelMarker(batchId))
     for (const id of [...activeChildren.keys(), ...activeWebJobs.keys()]) mark(cancelMarker(id))
     for (const child of activeChildren.values()) killGroup(child.pid, 'SIGTERM')
-    for (const sessionId of activeWebJobs.values()) web.cancelSession(sessionId).catch(() => {})
+    for (const sessionId of activeWebJobs.values()) cancelWebTurn(sessionId).catch(() => {})
     const hard = setTimeout(() => {
       for (const child of activeChildren.values()) {
         if (child.exitCode === null && child.signalCode === null) killGroup(child.pid, 'SIGKILL')

@@ -1,6 +1,6 @@
 // dsh-cli command line: parsing, command handlers, text and JSON output.
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -143,8 +143,8 @@ function insideWorkspace(dir) {
  * saving the old file as AGENTS.md.bak.
  */
 function ensureWorkspace(dir, { kind = 'general', description, init = false, overwrite = false } = {}) {
-  const abs = resolve(dir)
-  mkdirSync(abs, { recursive: true })
+  mkdirSync(resolve(dir), { recursive: true })
+  const abs = canonical(dir)
   const agents = join(abs, 'AGENTS.md')
   if (!init && insideWorkspace(abs)) return { path: abs, created: false, agentsMd: 'kept' }
   writeFileSync(join(abs, WORKSPACE_MARKER), JSON.stringify({ kind, createdAt: new Date().toISOString() }) + '\n')
@@ -158,18 +158,29 @@ function ensureWorkspace(dir, { kind = 'general', description, init = false, ove
   return { path: abs, created: true, agentsMd }
 }
 
+/**
+ * The canonical path of an existing directory: symlinks resolved (macOS /var is
+ * /private/var), Windows short names expanded. dsh reports its working folder this way
+ * and the web UI keys workspaces by path, so jobs store the same spelling.
+ */
+function canonical(dir) {
+  try {
+    return realpathSync.native(resolve(dir))
+  } catch {
+    return resolve(dir)
+  }
+}
+
 /** -C wins; an existing directory stays untouched, a new one becomes a workspace. */
 function resolveWorkspace(cwdOpt, fallbackName, kind) {
   if (cwdOpt) {
     const abs = resolve(expandHome(cwdOpt))
-    if (!existsSync(abs)) ensureWorkspace(abs, { kind })
-    return abs
+    return existsSync(abs) ? canonical(abs) : ensureWorkspace(abs, { kind }).path
   }
   const abs = join(cfg('workspaces') || defaultWorkspaceRoot(), `${dateStamp()}-${fallbackName}`)
   let candidate = abs
   for (let i = 2; existsSync(candidate); i++) candidate = `${abs}-${i}`
-  ensureWorkspace(candidate, { kind })
-  return candidate
+  return ensureWorkspace(candidate, { kind }).path
 }
 
 // ------------------------------------------------------------ job views ----
