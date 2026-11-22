@@ -30,6 +30,14 @@ const WORKSPACE_MARKER = '.dsho-workspace'
 let JSON_MODE = false
 const print = (text = '') => process.stdout.write(text.endsWith('\n') ? text : text + '\n')
 
+/** Help text for `cmd --help` (code 0) or a missing/unknown subcommand (code 2), also as JSON. */
+function showHelp(text, code) {
+  if (!JSON_MODE) print(text)
+  else if (code === 0) print(JSON.stringify({ ok: true, help: text }, null, 2))
+  else print(JSON.stringify({ ok: false, error: 'missing or unknown subcommand', code, hint: text.split('\n')[0] }))
+  return code
+}
+
 function emit(data, text) {
   if (JSON_MODE) print(JSON.stringify({ ok: true, ...data }, null, 2))
   else if (text != null) print(typeof text === 'function' ? text() : text)
@@ -260,7 +268,7 @@ function refJobs(ref) {
 }
 
 async function waitFor(refs, { timeoutMs, any = false } = {}) {
-  const deadline = timeoutMs ? Date.now() + timeoutMs : Infinity
+  const deadline = timeoutMs != null ? Date.now() + timeoutMs : Infinity
   const tty = process.stderr.isTTY && !JSON_MODE
   while (true) {
     const jobs = refs.flatMap(refJobs).filter(Boolean)
@@ -495,11 +503,12 @@ async function cmdRun(argv) {
     if (!MATERIAL_KINDS[kind]) throw new DshoError(`--kind must be one of ${Object.keys(MATERIAL_KINDS).join(', ')}`, 2)
     text = materialsPrompt(prompt, { kind, urls: values.url ?? [], count: Number(values.count ?? 6) })
   }
+  const tSec = timeoutSec(values)
   const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? slug(prompt, 32)
   const cwd = resolveWorkspace(values.cwd, name, template === 'raw' ? 'general' : template)
   const title = values.name ?? excerpt(prompt, 70)
-  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, backendChoice, access, model, effort, timeoutSec: timeoutSec(values) }, text)
+  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, backendChoice, access, model, effort, timeoutSec: tSec }, text)
   return finishStart({ kind: 'job', id: job.id }, values, () =>
     [
       `Job ${job.id} started (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -528,10 +537,11 @@ async function batchCommon(values, tasks, { template, defaultName, kind }) {
   const { model, effort } = validateModelOpts(values)
   const parallel = values.parallel ? Number(values.parallel) : Math.min(tasks.length, 10)
   if (!Number.isInteger(parallel) || parallel < 1) throw new DshoError('--parallel must be a positive number', 2)
+  const tSec = timeoutSec(values)
   const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? defaultName
   const root = resolveWorkspace(values.cwd, slug(name, 40), kind)
-  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: timeoutSec(values), model, effort, backend, backendChoice, access })
+  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend, backendChoice, access })
   return finishStart({ kind: 'batch', id: batch.id }, values, () =>
     [
       `Batch ${batch.id} started: ${tasks.length} jobs, ${parallel} in parallel (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -652,7 +662,7 @@ async function cmdWait(argv) {
   if (values.help) return print(HELP.wait), 0
   if (!positionals.length) throw new DshoError('wait needs at least one reference', 2)
   const refs = positionals.map(resolveRef)
-  const { jobs, timedOut } = await waitFor(refs, { timeoutMs: values.timeout ? parseDuration(values.timeout) * 1000 : undefined, any: values.any })
+  const { jobs, timedOut } = await waitFor(refs, { timeoutMs: values.timeout != null ? parseDuration(values.timeout) * 1000 : undefined, any: values.any })
   if (process.stderr.isTTY && !JSON_MODE) process.stderr.write('\r')
   const { exitCode } = waitOutcome(jobs, timedOut)
   emit({ timedOut, summary: summarizeJobs(jobs), jobs: jobs.map((j) => ({ ...jobView(j), result: j.status === 'done' ? jobResult(j.id) : null })) }, () => {
@@ -796,8 +806,7 @@ async function cmdWs(argv) {
   const [sub, ...rest] = argv
   const { values, positionals } = parse(rest, { kind: { type: 'string' }, description: { type: 'string' }, force: { type: 'boolean' } })
   if (values.help || sub !== 'init') {
-    print(HELP.ws)
-    return sub === 'init' || values.help || sub === '--help' || sub === '-h' ? 0 : 2
+    return showHelp(HELP.ws, sub === 'init' || values.help || sub === '--help' || sub === '-h' ? 0 : 2)
   }
   if (!positionals[0]) throw new DshoError('ws init needs a folder', 2)
   const res = ensureWorkspace(resolve(expandHome(positionals[0])), { kind: values.kind ?? 'general', description: values.description, init: true, overwrite: values.force })
@@ -812,15 +821,16 @@ async function cmdWs(argv) {
 }
 
 async function cmdCapture(argv) {
-  if (!argv.length || argv[0] === '-h' || argv[0] === '--help') {
-    print(HELP.capture)
-    return argv.length ? 0 : 2
+  // capture always prints one JSON object, so --json changes nothing and is not passed on.
+  const args = argv.filter((a) => a !== '--json')
+  if (!args.length || args[0] === '-h' || args[0] === '--help') {
+    return showHelp(HELP.capture, args.length ? 0 : 2)
   }
   const { python, playwright } = findPython()
   if (!playwright) throw new DshoError('Python Playwright not found', 5, `${PLAYWRIGHT_HINT}, or set DSHO_PYTHON`)
   // UTF-8 output: on Windows Python would otherwise print the JSON result in the ANSI code page.
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
-  const res = spawnSync(python, [CAPTURE_PY, ...argv.filter((a) => a !== '--json')], { stdio: 'inherit', env, windowsHide: true })
+  const res = spawnSync(python, [CAPTURE_PY, ...args], { stdio: 'inherit', env, windowsHide: true })
   if (res.error) throw new DshoError(`cannot start ${python}: ${res.error.message}`, 5)
   return res.status ?? 1
 }
@@ -873,8 +883,7 @@ async function cmdSkill(argv) {
   const [sub, ...rest] = argv
   const { values } = parse(rest, { agents: { type: 'string' }, copy: { type: 'boolean' } })
   if (values.help || sub !== 'install') {
-    print(HELP.skill)
-    return sub === 'install' || values.help ? 0 : 2
+    return showHelp(HELP.skill, sub === 'install' || values.help ? 0 : 2)
   }
   const res = installSkill({ agents: values.agents?.split(',').map((a) => a.trim()), copy: values.copy })
   emit(res, () => [`Skill dsh-orchestration installed: ${res.canonical}`, ...res.rows.slice(1).map((r) => `  ${pad(r.agent, 8)} ${r.action}: ${r.path}`)].join('\n'))

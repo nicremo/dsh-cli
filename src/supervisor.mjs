@@ -1,7 +1,7 @@
 // Runs a batch: a fixed pool of workers pulls queued jobs until none are left.
 import { existsSync, writeFileSync } from 'node:fs'
 import { batchCancelMarker, cancelJob, cancelMarker, runJob } from './runner.mjs'
-import { readBatch, readJobRaw, updateBatch, updateJob } from './store.mjs'
+import { readBatch, readJobRaw, TERMINAL, updateBatch, updateJob } from './store.mjs'
 import { DshoError, nowIso, sleep } from './util.mjs'
 
 export { batchCancelMarker }
@@ -39,6 +39,9 @@ export async function runBatch(id, { staggerMs = 400 } = {}) {
 export function cancelBatch(id) {
   const batch = readBatch(id)
   if (!batch) throw new DshoError(`Batch ${id} not found`, 3)
+  // Count before marking: the supervisor may record `cancelled` for queued jobs meanwhile.
+  const open = batch.jobs.filter((jid) => !TERMINAL.has(readJobRaw(jid)?.status))
   writeFileSync(batchCancelMarker(id), nowIso())
-  return batch.jobs.filter((jid) => cancelJob(jid)).length
+  for (const jid of open) cancelJob(jid)
+  return open.length
 }

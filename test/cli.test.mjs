@@ -215,6 +215,10 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
 
   test('wait --timeout exits 4 while the job runs on; result says 4; cancel stops it', inSandbox(async (s) => {
     const job = await s.startRunning(['-C', join(s.ws, 'long'), 'Long task SLEEP 30'])
+    // --timeout 0 checks once and returns at once instead of waiting forever.
+    const peek = await s.run(['wait', job.id, '--timeout', '0', '--json'])
+    assert.equal(peek.code, 4)
+    assert.equal(peek.json.timedOut, true)
     const wait = await s.run(['wait', job.id, '--timeout', '1s', '--json'])
     assert.equal(wait.code, 4)
     assert.equal(wait.json.ok, true)
@@ -335,6 +339,11 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
       ['cancel'],
       ['continue'],
       ['ws', 'init'],
+      ['ws'],
+      ['skill'],
+      ['capture'],
+      ['run', '--access', 'root', 'x'],
+      ['run', '-b', 'web', '--access', 'read-only', 'x'],
       ['config', 'frob'],
       ['config', 'set', 'bogus', 'v'],
       ['config', 'set', 'dshBin'],
@@ -353,6 +362,9 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     }
     assert.deepEqual((await s.run(['ls', '--json'])).json.jobs, [])
     assert.deepEqual(s.dshLog(), [])
+    // A rejected option creates nothing on disk either.
+    assert.equal((await s.run(['run', '-C', join(s.ws, 'never'), '-t', 'soon', 'x'])).code, 2)
+    assert.equal(existsSync(join(s.ws, 'never')), false)
 
     // Text mode: the message goes to stderr, stdout stays clean for pipes.
     const text = await s.run(['run', '--bogus', 'x'])
@@ -396,6 +408,21 @@ describe('dsho CLI, headless jobs', { concurrency: 8 }, () => {
     }
     assert.match((await s.run(['wait', '--help'])).out, /Exit 0 all done, 1 something failed, 4 timeout reached/)
     assert.deepEqual(s.dshLog(), [])
+  }))
+
+  test('--access picks the dsh permission preset; workers never wait for approvals', inSandbox(async (s) => {
+    const presets = { 'read-only': 'read-only', 'workspace-write': 'workspace-write', full: 'danger-full-access' }
+    for (const [access, preset] of Object.entries(presets)) {
+      const r = await s.run(['run', '-C', join(s.ws, access), '--access', access, '-w', '--json', `Sandbox ${access}`])
+      assert.equal(r.code, 0, r.out + r.err)
+      const start = s.dshLog().find((e) => e.event === 'start' && e.task === `Sandbox ${access}`)
+      assert.deepEqual(start.args, ['--json', '--permission-mode', preset, '--approval-policy', 'never', '-'])
+    }
+    // continue keeps the sandbox of the job it continues.
+    const parent = (await s.run(['status', 'last', '--json'])).json.job
+    await s.run(['continue', parent.id, '-w', '--json', 'Sandbox follow-up'])
+    const follow = s.dshLog().find((e) => e.event === 'start' && e.task === 'Sandbox follow-up')
+    assert.ok(follow.args.includes('danger-full-access'), follow.args.join(' '))
   }))
 
   // ------------------------------------------------------ open issues ----
