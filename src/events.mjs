@@ -30,6 +30,17 @@ export function parseLines(text) {
   return events
 }
 
+/**
+ * "CODE: message" of a turn end reason. dsh up to 0.2.1 put code and message on
+ * the reason itself; 0.2.2 nests them: `{ kind: 'error', error: { code, message } }`.
+ */
+export function reasonText(reason) {
+  if (!reason) return ''
+  const code = reason.code ?? reason.error?.code
+  const message = reason.message ?? reason.error?.message
+  return [code, message].filter(Boolean).join(': ')
+}
+
 export function fold(state, ev) {
   const s = state
   switch (ev?.type) {
@@ -48,7 +59,7 @@ export function fold(state, ev) {
       } else if (ev.phase === 'turn_end') {
         s.turnEnd = ev.reason?.kind ?? 'unknown'
         if (s.turnEnd !== 'completed') {
-          s.error = [ev.reason?.code, ev.reason?.message].filter(Boolean).join(': ') || s.turnEnd
+          s.error = reasonText(ev.reason) || s.turnEnd
         }
       }
       break
@@ -61,6 +72,11 @@ export function fold(state, ev) {
       break
     case 'final':
       s.final = ev.text ?? ''
+      // 0.2.2 repeats the turn end reason on the final event (also without a turn_end line).
+      if (ev.reason?.kind && ev.reason.kind !== 'completed') {
+        s.turnEnd ??= ev.reason.kind
+        s.error ??= reasonText(ev.reason) || ev.reason.kind
+      }
       break
     case 'error':
       s.error = ev.message ?? 'unknown error'
@@ -109,8 +125,7 @@ export function timeline(events, { full = false } = {}) {
         break
       case 'status':
         if (ev.phase === 'turn_end') {
-          const r = ev.reason ?? {}
-          lines.push(`turn_end: ${[r.kind, r.code, r.message].filter(Boolean).join(' / ')}`)
+          lines.push(`turn_end: ${[ev.reason?.kind, reasonText(ev.reason)].filter(Boolean).join(' / ')}`)
         }
         break
       case 'error':

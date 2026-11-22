@@ -174,13 +174,26 @@ export async function cancelSession(sessionId) {
 
 const address = (sessionId) => ({ kind: 'session', sessionId })
 
-/** Newest committed event seq of a Session. */
+/**
+ * Newest committed event seq of a Session.
+ *
+ * dsh 0.2.2+ answers `session/page` without `throughSeq` with `{ cursor, records, hasMore }`.
+ * Older servers required `throughSeq`; for them an out-of-range value makes the error name
+ * the cursor ("... past cursor N", later "session history cut X exceeds N").
+ */
 export async function cursor(sessionId) {
+  let value
+  try {
+    value = await call('session/page', { request: { address: address(sessionId), maxMessages: 1 } })
+  } catch (err) {
+    if (!(err instanceof WebError)) throw err
+  }
+  if (Number.isSafeInteger(value?.cursor)) return value.cursor
   try {
     await call('session/page', { request: { address: address(sessionId), throughSeq: 2147483647, maxMessages: 1 } })
   } catch (err) {
-    const m = /past cursor (\d+)/.exec(err.message)
-    if (m) return Number(m[1])
+    const m = /past cursor (\d+)|exceeds (\d+)/.exec(err.message)
+    if (m) return Number(m[1] ?? m[2])
     throw err
   }
   throw new DshoError('DSH web: cannot determine the session cursor', 1)
