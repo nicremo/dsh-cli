@@ -1,9 +1,8 @@
 // Persistent settings in ~/.dsho/config.json. Environment variables win over
 // the file, so CI and one-off calls can still override everything.
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { home } from './paths.mjs'
-import { DshoError, readJson, writeJsonAtomic } from './util.mjs'
+import { DshoError, expandHome, readJson, writeJsonAtomic } from './util.mjs'
 
 export const CONFIG_KEYS = {
   dshRepo: { env: 'DSHO_DSH_REPO', help: 'path to a dsh source checkout (wins over dshBin)' },
@@ -12,10 +11,12 @@ export const CONFIG_KEYS = {
   backend: { env: 'DSHO_BACKEND', help: 'auto | web | headless' },
   workspaces: { env: 'DSHO_WORKSPACES', help: 'root folder for new workspaces (default ~/dsh-workspaces)' },
   python: { env: 'DSHO_PYTHON', help: 'python with playwright for dsho capture' },
+  provider: { env: 'DSHO_PROVIDER', help: 'model provider route for workers, e.g. openrouter (default: dsh settings, else deepseek-official)' },
+  model: { env: 'DSHO_MODEL', help: 'default model for jobs without -m, e.g. v4-flash' },
+  access: { env: 'DSHO_ACCESS', help: 'sandbox for headless workers: read-only | workspace-write | full (default: dsh profile preset)' },
 }
 
 const file = () => join(home(), 'config.json')
-const expand = (v) => (typeof v === 'string' ? v.replace(/^~(?=$|\/)/, homedir()) : v)
 
 export function readConfig() {
   return readJson(file(), {}) ?? {}
@@ -24,7 +25,7 @@ export function readConfig() {
 /** Effective value: environment first, then config.json. */
 export function cfg(key) {
   const def = CONFIG_KEYS[key]
-  return expand(process.env[def.env] || readConfig()[key] || null)
+  return expandHome(process.env[def.env] || readConfig()[key] || null)
 }
 
 export function setConfig(key, value) {

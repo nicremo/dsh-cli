@@ -122,9 +122,21 @@ export async function call(method, args, { retryAuth = true } = {}) {
     return call(method, args, { retryAuth: false })
   }
   if (res.status !== 200) throw new DshoError(`DSH web ${method}: HTTP ${res.status}`, 5)
-  const body = await res.json()
-  if (!body?.result?.ok) throw new WebError(method, body?.result?.error)
-  return body.result.value
+  let body
+  try {
+    body = await res.json()
+  } catch {
+    body = null
+  }
+  const result = body?.result
+  // Only a well-formed answer counts: { ok: true, value } or { ok: false, error: { ... } }.
+  // Anything else says nothing about whether the server acted on the call, so it is not
+  // a WebError (which callers may treat as a confirmed rejection).
+  if (typeof result?.ok !== 'boolean' || (!result.ok && (typeof result.error !== 'object' || result.error === null))) {
+    throw new DshoError(`DSH web ${method}: malformed answer`, 1)
+  }
+  if (!result.ok) throw new WebError(method, result.error)
+  return result.value
 }
 
 /** True when the DSH web server answers an authenticated request. */
@@ -174,13 +186,26 @@ export async function cancelSession(sessionId) {
 
 const address = (sessionId) => ({ kind: 'session', sessionId })
 
-/** Newest committed event seq of a Session. */
+/**
+ * Newest committed event seq of a Session.
+ *
+ * dsh 0.2.2+ answers `session/page` without `throughSeq` with `{ cursor, records, hasMore }`.
+ * Older servers required `throughSeq`; for them an out-of-range value makes the error name
+ * the cursor ("... past cursor N", later "session history cut X exceeds N").
+ */
 export async function cursor(sessionId) {
+  let value
+  try {
+    value = await call('session/page', { request: { address: address(sessionId), maxMessages: 1 } })
+  } catch (err) {
+    if (!(err instanceof WebError)) throw err
+  }
+  if (Number.isSafeInteger(value?.cursor)) return value.cursor
   try {
     await call('session/page', { request: { address: address(sessionId), throughSeq: 2147483647, maxMessages: 1 } })
   } catch (err) {
-    const m = /past cursor (\d+)/.exec(err.message)
-    if (m) return Number(m[1])
+    const m = /past cursor (\d+)|exceeds (\d+)/.exec(err.message)
+    if (m) return Number(m[1] ?? m[2])
     throw err
   }
   throw new DshoError('DSH web: cannot determine the session cursor', 1)
@@ -278,7 +303,7 @@ export async function startServer({ port = 3080, timeoutMs = 120000 } = {}) {
   mkdirSync(logsDir(), { recursive: true })
   const logFile = join(logsDir(), 'dsh-web.log')
   const fd = openSync(logFile, 'w')
-  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', fd, fd], env, cwd: homedir() })
+  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', fd, fd], env, cwd: homedir(), windowsHide: true })
   closeSync(fd)
   child.unref()
   const deadline = Date.now() + timeoutMs

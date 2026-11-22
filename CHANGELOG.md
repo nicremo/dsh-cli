@@ -4,9 +4,51 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-11-22
+
+Windows support and compatibility with DeepSeek Harness 0.2.2. Tested on Windows 11 with
+dsh 0.2.2-rc.5 and real DeepSeek runs (headless and web UI, batches, cancel, continue, sandbox);
+CI covers Ubuntu, macOS and Windows on Node 22 and 24. The test suite was rewritten after a
+critical review: 104 tests through the CLI process, the dsh boundary and pure helpers.
+
+### Added
+
+- Windows support (thanks to @apohl23-oss, #11): `dshBin` can be a `.cmd` shim (npm or the DeepSeek Harness desktop app); `which` tries `.exe`/`.cmd`/`.bat`; workers run without console windows; `cancel` ends the whole process tree through `System32\taskkill.exe`; skills are linked with junctions (no admin rights) and copied where a junction cannot reach. `dsho capture` stops hanging pages with `taskkill`, finds `python`/`py`, and prints UTF-8 on every console; `~\` paths expand like `~/`.
+- `--access read-only|workspace-write|full` (config key `access`) picks the dsh write sandbox for headless workers (it limits writes, not reads or network access). Workers always run with `--approval-policy never`, so they no longer stall on approval prompts: actions the sandbox forbids are rejected and the model is told so (#1).
+- An auto-selected web job falls back to headless when the DSH web UI fails before the task is sent.
+- `continue --access` changes the sandbox for a follow-up; without it the job's sandbox carries over.
+- `doctor` lists the names (never values) of the model API keys it finds, checks that the profile loads the credentials store, and on Windows warns when dsh was installed into an MSIX app's private storage (for example from inside the Claude desktop app).
+- `provider` and `model` config keys (`DSHO_PROVIDER`, `DSHO_MODEL`) for the provider route and the default model of every job, shared by the headless and web backends; with `openrouter`, short DeepSeek names map to `deepseek/<id>` catalog ids (#11).
+- `setup` copies the model provider settings (`llm-pi-ai`, `agent-default-model`) from the source profile into `orchestra`; `--no-llm` opts out (#11).
+- Headless workers receive provider keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` (the environment wins) (#11).
+- `ws init --force` replaces an existing `AGENTS.md` and keeps the previous one as `AGENTS.md.bak`.
+- CI runs on Windows too; `.gitattributes` keeps LF line endings in every checkout.
+
+### Fixed
+
+- Web backend with dsh 0.2.2: the session cursor comes from the structured history API instead of an error message, which blocked every web job (#3).
+- dsh 0.2.2 error reasons (`reason.error.code/message`) show up in `status`, `logs` and `result` instead of a bare "error"; an error turn's empty answer no longer hides the error.
+- A later turn in the same web session can no longer overwrite an earlier job's `result.md` (#5).
+- SIGTERM/SIGINT to a runner cancels its web turns and lets headless workers reach the SIGKILL escalation before it exits; jobs end as `cancelled` instead of `lost`, and a stopped batch starts no queued jobs (#6, #7).
+- `setup --skills` removes links of an earlier selection from the curated skill folder (#8).
+- `last` picks the newest job also when several jobs were created in the same millisecond (#9).
+- `logs --stderr --json` prints a JSON object (#10).
+- Headless workers see the API key saved in the DSH UI: `setup` turns the credentials store back on, which dsh 0.2.2's headless template disables.
+- `capture scroll` scrolls again: unlocking modal scroll locks with `overflow: auto` on both `html` and `body` turned every scroll video into a still image.
+- Windows: concurrent rewrites of `job.json` by the launching command and the runner no longer fail with EPERM (jobs ended up `lost` or `queued` forever).
+- `wait --timeout 0` returns at once; `ws`, `skill` and `capture` without a subcommand print JSON with `--json`; `run -t` is validated before the workspace is created.
+- `ws init` no longer overwrites an existing `AGENTS.md` (#2).
+- Install instructions: the package is `@nicremo/dsh-cli` (npm rejects the unscoped name `dsh-cli`); `npm install -g github:nicremo/dsh-cli` installs the unreleased state (#4).
+- Web jobs: a stop during workspace or session setup cancels the job before its task is sent; one `session/cancel` per turn; no headless fallback once a prompt may have reached the UI (a lost answer would have run the task twice).
+- Workspaces are stored with their canonical path (macOS `/private/var`, Windows long names), the spelling dsh and the web UI use.
+- Windows: a dead runner is reported as `lost` even after Windows gave its pid to another process (runners hold an exclusive owner lock). A tree kill (taskkill /T, logoff, crash) leaves the job `lost` instead of reporting a dsh failure; `last` and `last-batch` follow the creation time across processes.
+- `setup` copies a curated skill it cannot link (Windows junctions cannot reach network shares) and keeps the copy up to date.
+- `npm test` runs on Windows (cmd.exe kept the single quotes of the test glob and ran no tests) (#11).
+
 ## [0.1.0] - 2026-10-07
 
 ### Added
+
 - `run`, `batch`, `research` and `materials` to start DeepSeek Harness jobs in workspace folders, alone or as parallel batches.
 - Web backend: jobs run as sessions inside a running DSH web UI (one workspace per batch, named sessions), with `ui start`, `ui login` and `ui`.
 - Headless backend with the `orchestra` profile created by `setup` (research MCP servers copied from another profile, curated skills).
@@ -15,4 +57,5 @@ All notable changes to this project are documented here. The format follows
 - `skill install`: the `dsh-orchestration` Agent Skill for Claude Code, Codex, OpenCode, Pi and other harnesses.
 - `config`, `doctor`, `guide`, `ws init`.
 
+[0.2.0]: https://github.com/nicremo/dsh-cli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nicremo/dsh-cli/releases/tag/v0.1.0

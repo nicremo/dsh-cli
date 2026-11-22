@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractRows, mcpFilter, renderPatch } from '../src/profile.mjs'
+import { credentialsStoreState, extractEntries, extractRows, LLM_ENTRIES, mcpFilter, renderPatch } from '../src/profile.mjs'
 
 const MCP = "'@deepseek-ai/dsh-mcp-client'"
 const WEB_PATCH = `# fixture with fake values only
@@ -61,9 +61,61 @@ test('renderPatch emits skill, instruction and insert rows that parse back', () 
   assert.doesNotMatch(renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web' }), /skill-filesystem/)
 })
 
+test('renderPatch turns the credentials store back on (the headless template disables it)', () => {
+  const { rows, dump } = extractRows('[]', () => false)
+  const text = renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web' })
+  assert.match(text, /^- id: credentials\n {2}disabled: false$/m)
+  assert.equal(credentialsStoreState(text), 'enabled')
+})
+
+test('credentialsStoreState reads a composed profile', () => {
+  const composed = (credentials) => `# == base\n- id: timer\n  name: x\n${credentials}- id: llm\n  name: y\n`
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  name: '@deepseek-ai/dsh-credentials-local'\n  disabled: true\n")), 'disabled')
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  name: '@deepseek-ai/dsh-credentials-local'\n")), 'enabled')
+  // A !!js condition is not a literal "disabled".
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  disabled: !!js 'false'\n")), 'enabled')
+  assert.equal(credentialsStoreState(composed('')), null)
+  assert.equal(credentialsStoreState('not: [yaml'), null)
+})
+
 test('!!js scalars survive a copy unchanged', () => {
   const { rows, dump } = extractRows(WEB_PATCH, mcpFilter('mcp-supabase'))
   const text = dump([{ insert: rows }])
   assert.match(text, /!!js .*Bearer/)
   assert.doesNotMatch(text, /\[object Object\]/)
+})
+
+const LLM_PATCH = `# fixture with fake values only
+- id: ui-settings-general
+  config:
+    theme: dark
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+        baseUrl: !!js "process.env.OPENROUTER_BASE ?? 'https://openrouter.ai/api/v1'"
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: openrouter
+    model: ~deepseek/deepseek-v4-flash-latest
+`
+
+test('extractEntries picks the model provider entries only', () => {
+  assert.deepEqual(extractEntries(LLM_PATCH, LLM_ENTRIES).map((e) => e.id), ['llm-pi-ai', 'agent-default-model'])
+  assert.deepEqual(extractEntries('[]', LLM_ENTRIES), [])
+})
+
+test('renderPatch carries copied model entries, !!js included', () => {
+  const entries = extractEntries(LLM_PATCH, LLM_ENTRIES)
+  const { rows, dump } = extractRows(WEB_PATCH, mcpFilter('research'))
+  const text = renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web', entries })
+  assert.match(text, /model provider settings \(llm-pi-ai, agent-default-model\)/)
+  assert.match(text, /provider: openrouter/)
+  assert.match(text, /!!js .*OPENROUTER_BASE/)
+  assert.doesNotMatch(text, /\[object Object\]|src:/)
+  assert.equal(extractEntries(text, LLM_ENTRIES).length, 2)
+  assert.equal(extractRows(text, mcpFilter('all')).rows.length, 2)
 })

@@ -4,10 +4,11 @@
 
 **Let Claude Code, Codex, OpenCode, Pi or any other agent run DeepSeek Harness sessions in parallel.**
 
-[![npm](https://img.shields.io/npm/v/dsh-cli?color=4D6BFE&label=npm)](https://www.npmjs.com/package/dsh-cli)
+[![npm](https://img.shields.io/npm/v/@nicremo/dsh-cli?color=4D6BFE&label=npm)](https://www.npmjs.com/package/@nicremo/dsh-cli)
 [![CI](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555)
 
 **[deepseekharnesscli.nicremo.de](https://deepseekharnesscli.nicremo.de)**
 
@@ -28,7 +29,8 @@ dsh-cli is **agent first**. Every command is non-interactive, returns at once, p
 - **Parallel research batches**: `dsho research "q1" "q2" ...` runs one worker per question; each writes `report.md` and `sources.json`, `dsho collect` merges them into one `INDEX.md`.
 - **Material gathering**: `dsho materials "brief"` runs one worker per kind (screenshots, scroll videos, news articles, stock footage, stock photos) with a `manifest.json` that records source and licence for every file.
 - **Live in the DSH web UI**: when `dsh web` is running, every job is a real session in that UI. A batch becomes its own workspace, every session gets a readable title, and you can watch or step in.
-- **Headless fallback**: without the UI, each job runs in its own headless dsh process with a lean profile (`orchestra`) that reuses your research MCP servers.
+- **Headless fallback**: without the UI, each job runs in its own headless dsh process with a lean profile (`orchestra`) that reuses your research MCP servers. If the UI fails before a job is sent, an auto-selected job runs headless instead.
+- **Sandboxed, never stuck**: headless workers never wait for an approval nobody gives (such actions are rejected and the model works around them), and `--access read-only|workspace-write|full` picks the dsh write sandbox per job.
 - **Steer like a human would**: `wait`, `status`, `logs -f`, `result`, `files`, `continue` (same session, same folder), `cancel`.
 - **Deterministic captures**: `dsho capture shot|scroll <url>` takes clean screenshots and smooth 1080p scroll videos with Playwright (cookie banners dismissed, overlays hidden, ad networks blocked, watchdog for hanging pages).
 - **No daemon**: state is plain JSON in `~/.dsho/`; detached runner processes keep jobs alive after the calling shell exits.
@@ -56,14 +58,19 @@ flowchart LR
 
 - Node.js `>=22.19`
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), installed with `npm install -g @deepseek-ai/dsh` (or a source checkout), logged in once
-- Optional, for `dsho capture`: Python 3 with Playwright (`pip install playwright && python3 -m playwright install chromium`) and ffmpeg
-- macOS or Linux
+- Optional, for `dsho capture`: Python 3 with Playwright (`python3 -m pip install playwright && python3 -m playwright install chromium`; on Windows `python` instead of `python3`) and ffmpeg (`brew install ffmpeg`, `apt install ffmpeg`, `winget install Gyan.FFmpeg`)
+- macOS, Linux or Windows (PowerShell or cmd; Windows Terminal recommended). On Windows, `dshBin` may point at a `.cmd` shim: npm's `dsh.cmd` or the CLI bundled with the DeepSeek Harness desktop app (`%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`). dsh-cli reads the shim and starts its script directly, since Node cannot spawn `.cmd` files without a shell.
 
 ## Install
 
 ```sh
-npm install -g dsh-cli && dsho setup
+npm install -g @nicremo/dsh-cli
+dsho setup
 ```
+
+Update with the same command. The latest unreleased state, including Windows support before 0.2.0 reaches npm, installs straight from GitHub: `npm install -g github:nicremo/dsh-cli` (no build step involved).
+
+On Windows, install Node.js, dsh and dsh-cli from a normal terminal (PowerShell or Windows Terminal). Apps packaged as MSIX, the Claude desktop app among them, virtualize `%APPDATA%`: a global `npm install` run from inside such an app lands in the app's private copy and is invisible everywhere else. `dsho doctor` warns when it finds dsh there.
 
 `dsho setup` creates the headless dsh profile `orchestra` and installs the `dsh-orchestration` skill into `~/.agents/skills` (read by OpenCode and other harnesses) with links for Claude Code, Codex and Pi when they are installed. Run `dsho doctor` to check everything.
 
@@ -123,7 +130,7 @@ The skill tells the agent to start a batch, wait in steps that fit its shell tim
 | `dsho config [set\|unset]` | persistent settings |
 | `dsho guide` | the manual for agents |
 
-References: job id, batch id, unique prefix, name, `last`, `last-batch`. Common options: `-C <dir>` workspace folder, `-m flash|pro|v4-flash|vision`, `--effort off|low|high|max`, `-t <duration>` time limit, `-p <n>` parallelism, `-b auto|web|headless` backend. Every command has `--help`.
+References: job id, batch id, unique prefix, name, `last`, `last-batch`. Common options: `-C <dir>` workspace folder, `-m flash|pro|v4-flash|vision`, `--effort off|low|high|max`, `-t <duration>` time limit, `-p <n>` parallelism, `-b auto|web|headless` backend, `--access read-only|workspace-write|full` sandbox (headless). Every command has `--help`.
 
 ### JSON and exit codes
 
@@ -151,8 +158,11 @@ When the web UI is reachable, dsh-cli talks to its HTTP API (`POST /api/<namespa
 Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho setup` builds that profile from the shipped headless template plus:
 
 - MCP servers copied from another profile (default `web`): `--mcp research` (firecrawl, Brave, context7, Exa, Tavily, Perplexity, Jina and similar; default), `all`, `none` or a comma list of ids. Copied rows can contain API keys, so the profile file is written with mode 0600 and nothing is printed.
+- The model provider settings of the same profile (`llm-pi-ai` with its provider routes, `agent-default-model`), so workers reach the models you configured in the app, for example through OpenRouter. `--no-llm` keeps the template's settings.
 - A curated skill folder (`~/.dsh/skills-orchestra`, symlinks into `~/.agents/skills`) instead of your whole skill pool, which keeps the worker prompt about a third smaller. `--skills a,b,c` picks others, `--skills all` keeps dsh defaults.
 - `.dsho-workspace` as an extra project root marker, so workers in batch subfolders still load the workspace `AGENTS.md`.
+
+Headless dsh reads provider keys (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, ...) only from the environment. Keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` are therefore passed to each worker process; variables that are already set win, and no value is ever printed.
 
 ## Configuration
 
@@ -166,6 +176,11 @@ Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho se
 | `backend` | `DSHO_BACKEND` | `auto`, `web` or `headless` |
 | `workspaces` | `DSHO_WORKSPACES` | root for new workspaces (default `~/dsh-workspaces`) |
 | `python` | `DSHO_PYTHON` | Python with Playwright for captures |
+| `provider` | `DSHO_PROVIDER` | model provider route for workers, e.g. `openrouter` (default: `~/.dsh/settings.yaml`, else `deepseek-official`) |
+| `model` | `DSHO_MODEL` | default model for jobs without `-m`, e.g. `v4-flash` |
+| `access` | `DSHO_ACCESS` | sandbox for headless workers: `read-only`, `workspace-write` or `full` (default: the dsh profile's preset) |
+
+With `provider openrouter`, the short names map to OpenRouter catalog ids: `v4-flash` → `deepseek/deepseek-v4-flash`, `pro` → `deepseek/deepseek-v4-pro`, `flash` → `~deepseek/deepseek-flash-latest`.
 
 Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh home, default `~/.dsh`), `DSHO_WEB_TOKEN_URL` / `DSHO_WEB_TOKEN_FILE` (token URL of the web UI).
 
@@ -191,13 +206,16 @@ Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh 
 | `dsh not found` | `npm install -g @deepseek-ai/dsh`, or `dsho config set dshBin <path>` |
 | jobs do not show up in the UI | `dsho doctor`; `dsho ui start` or `dsho ui login <url>`; start jobs with `-b web` |
 | a job is `lost` | its runner process died (reboot, kill); start it again |
-| headless workers stall | set dsh's permission preset to full access for unattended runs (`dsho doctor` shows it) |
+| `MISSING_CREDENTIAL` in `dsho logs <job> --stderr` | store your DeepSeek API key once: `dsho ui start`, then Settings → Models in the UI (or set `DEEPSEEK_API_KEY`) |
+| a worker reports that an action was rejected | the sandbox blocked it (workers never wait for approvals); widen it for that job with `--access full` |
+| Windows: `dsh not found` | npm's global folder (`%APPDATA%\npm`) must be on `PATH`; or `dsho config set dshBin "%APPDATA%\npm\dsh.cmd"` |
+| Windows: `dsho doctor` reports `msix` | dsh was installed from inside an MSIX app (such as the Claude desktop app) and exists only there; install Node.js, dsh and dsh-cli again from PowerShell or Windows Terminal |
 | `dsho capture` fails | `pip install playwright && python3 -m playwright install chromium`; scroll videos need ffmpeg |
 | a page hangs during capture | the watchdog stops it after `--max-time` (default 90 s for shots) |
 
 ## Safety
 
-dsh workers can run shell commands; many setups run dsh with full access and no sandbox. Keep tasks scoped to the workspace and never delegate deletes, deploys, git pushes or anything that touches secrets. Material found by workers is not automatically yours to publish: check licence and source in `manifest.json`. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+dsh workers can run shell commands. Headless workers never wait for approvals: whatever the sandbox does not allow is rejected. The presets limit **writes**, not reads or network access: `--access read-only` forbids writing, `--access workspace-write` allows writes in the workspace plus dsh's temporary and configured writable folders, `--access full` removes the sandbox. A worker can still read files your user account can read (including secrets outside the workspace) and send data over the network, so run dsh-cli only with tasks and sources you trust. Keep tasks scoped to the workspace and never delegate deletes, deploys, git pushes or anything that touches secrets. Material found by workers is not automatically yours to publish: check licence and source in `manifest.json`. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## Development
 

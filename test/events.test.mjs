@@ -1,105 +1,96 @@
+// Folding the headless `dsh --json` event stream into job progress and into
+// the `dsho logs` timeline. The fixture is the recorded output of a real dsh run.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fold, initialState, parseLines, timeline } from '../src/events.mjs'
-import { resolveModel, spawnSpec } from '../src/dsh.mjs'
-
-// Keep the user's ~/.dsho/config.json out of these tests.
-process.env.DSHO_HOME = mkdtempSync(join(tmpdir(), 'dsho-events-'))
+import { readFileSync } from 'node:fs'
+import { describeInput, fold, initialState, parseLines, timeline } from '../src/events.mjs'
 
 const real = readFileSync(new URL('./fixtures/real-run.jsonl', import.meta.url), 'utf8')
+const run = (events) => events.reduce(fold, initialState())
 
 test('fold summarizes a real dsh run', () => {
-  const events = parseLines(real)
-  const s = events.reduce(fold, initialState())
+  const s = run(parseLines(real))
   assert.equal(s.sessionId, 'session-70cd87b2-556c-4077-a6e6-0061ed62c942')
+  assert.equal(s.cwd, '/tmp/dsh-cli-demo/ws1')
   assert.equal(s.steps, 6)
   assert.equal(s.toolCalls, 6)
   assert.equal(s.lastTool, 'bash')
   assert.equal(s.turnEnd, 'completed')
+  assert.equal(s.error, null)
   assert.match(s.final, /^OK/)
   assert.ok(s.usage.inputTokens > 50000)
   assert.ok(s.usage.cacheReadTokens > 0)
 })
 
-test('fold records error turn ends', () => {
-  const s = [
-    { type: 'session', sessionId: 's1', cwd: '/x' },
-    { type: 'status', phase: 'turn_end', reason: { kind: 'error', code: 'rate_limit', message: 'Too many requests' } },
-  ].reduce(fold, initialState())
-  assert.equal(s.turnEnd, 'error')
-  assert.match(s.error, /Too many requests/)
+test('fold adds up the usage of every step and counts tool calls', () => {
+  const s = run([
+    { type: 'status', phase: 'step_start', turn: 1, step: 1 },
+    { type: 'tool_call', callId: 'a', tool: 'web_search', input: {} },
+    { type: 'tool_call', callId: 'b', tool: 'write', input: {} },
+    { type: 'status', phase: 'step_end', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50 } },
+    { type: 'status', phase: 'step_end', usage: { inputTokens: 7, outputTokens: 3 } },
+    { type: 'status', phase: 'step_end' },
+    { type: 'text', text: 'draft' },
+    { type: 'final', text: 'answer' },
+  ])
+  assert.deepEqual(
+    { steps: s.steps, toolCalls: s.toolCalls, lastTool: s.lastTool, usage: s.usage, final: s.final, turnEnd: s.turnEnd },
+    { steps: 3, toolCalls: 2, lastTool: 'write', usage: { inputTokens: 107, outputTokens: 23, cacheReadTokens: 50 }, final: 'answer', turnEnd: null },
+  )
 })
 
-test('parseLines skips broken lines', () => {
-  assert.equal(parseLines('{"type":"final","text":"a"}\nnot json\n\n').length, 1)
+test('fold keeps the reason of a turn that did not complete', () => {
+  const failed = run([{ type: 'status', phase: 'turn_end', reason: { kind: 'error', code: 'rate_limit', message: 'Too many requests' } }])
+  assert.deepEqual([failed.turnEnd, failed.error], ['error', 'rate_limit: Too many requests'])
+  const aborted = run([{ type: 'status', phase: 'turn_end', reason: { kind: 'aborted' } }])
+  assert.deepEqual([aborted.turnEnd, aborted.error], ['aborted', 'aborted'])
+  assert.equal(run([{ type: 'error', message: 'model not found' }]).error, 'model not found')
+  assert.equal(run([{ type: 'status', phase: 'turn_end', reason: { kind: 'completed' } }]).error, null)
 })
 
-test('timeline shows tool calls compactly', () => {
+test('fold ignores events it does not know', () => {
+  assert.deepEqual(run([null, {}, { type: 'brand-new-event', steps: 99 }]), initialState())
+})
+
+test('parseLines skips blank and broken lines', () => {
+  assert.deepEqual(parseLines('{"type":"final","text":"a"}\nnot json\n\n{"type":"te'), [{ type: 'final', text: 'a' }])
+})
+
+test('timeline of the real run: tool calls with their main argument, the answer last, thinking only with full', () => {
   const lines = timeline(parseLines(real))
-  assert.ok(lines.some((l) => l.includes('web_search') && l.includes('Node.js current LTS version')))
-  assert.ok(lines.some((l) => l.includes('bash') && l.includes('curl -sI https://example.com')))
-  assert.ok(lines.some((l) => l.includes('write') && l.includes('result.md')))
-  assert.ok(lines.at(-1).startsWith('final'))
+  assert.equal(lines[0], 'session: session-70cd87b2-556c-4077-a6e6-0061ed62c942')
+  assert.ok(lines.includes('→ web_search: Node.js current LTS version'))
+  assert.ok(lines.some((l) => l.startsWith('→ bash: curl -sI https://example.com')))
+  assert.ok(lines.some((l) => l.startsWith('→ write: ') && l.includes('result.md')))
+  assert.ok(lines.at(-1).startsWith('final: OK'))
   assert.ok(!lines.some((l) => l.startsWith('thinking')))
-  assert.ok(timeline(parseLines(real), { full: true }).some((l) => l.startsWith('thinking')))
+  assert.ok(timeline(parseLines(real), { full: true }).some((l) => l.startsWith('thinking: The user wants three simple steps')))
 })
 
-test('resolveModel maps short names', () => {
-  assert.equal(resolveModel('flash'), 'deepseek-flash')
-  assert.equal(resolveModel('pro'), 'deepseek-v4-pro')
-  assert.equal(resolveModel('v4-flash'), 'deepseek-v4-flash')
-  assert.equal(resolveModel('vision'), 'deepseek-v4-flash-vision-exp')
-  assert.equal(resolveModel('deepseek-custom'), 'deepseek-custom')
+test('timeline marks failed tool results and shortens long output unless full', () => {
+  const events = [
+    { type: 'tool_result', callId: 'a', status: 'completed', result: 'fine' },
+    { type: 'tool_result', callId: 'b', status: 'failed', result: 'exit 1' },
+    { type: 'tool_result', callId: 'c', status: 'completed', result: { rows: 2 } },
+    { type: 'status', phase: 'turn_end', reason: { kind: 'error', code: 'fake', message: 'broke' } },
+    { type: 'error', message: 'boom' },
+    { type: 'text', text: 'x'.repeat(500) },
+  ]
+  const lines = timeline(events)
+  assert.deepEqual(lines.slice(0, 5), ['  ✓ fine', '  ✗ failed: exit 1', '  ✓ {"rows":2}', 'turn_end: error / fake: broke', 'error: boom'])
+  assert.equal(lines[5], `text: ${'x'.repeat(199)}…`)
+  assert.equal(timeline(events, { full: true })[5], `text: ${'x'.repeat(500)}`)
 })
 
-test('spawnSpec honours DSHO_DSH_CMD and session ids', () => {
-  process.env.DSHO_DSH_CMD = '/bin/fake'
-  try {
-    const spec = spawnSpec({ sessionId: 'session-1', jobDir: '/tmp' })
-    assert.equal(spec.cmd, '/bin/fake')
-    assert.deepEqual(spec.args, ['--json', '--session-id', 'session-1', '-'])
-  } finally {
-    delete process.env.DSHO_DSH_CMD
-  }
-})
-
-test('spawnSpec builds the dsh command with a settings override', () => {
-  const dshHome = mkdtempSync(join(tmpdir(), 'dsho-dshhome-'))
-  const jobDir = mkdtempSync(join(tmpdir(), 'dsho-job-'))
-  writeFileSync(join(dshHome, 'settings.yaml'), 'permission:\n  defaultPreset: danger-full-access\nagent-default-model:\n  provider: deepseek-official\n  model: deepseek-flash\n  reasoningEffort: max\n')
-  process.env.DSH_HOME = dshHome
-  process.env.DSHO_DSH_BIN = '/usr/bin/true'
-  try {
-    const spec = spawnSpec({ model: 'pro', effort: 'high', jobDir })
-    assert.equal(spec.cmd, '/usr/bin/true')
-    assert.deepEqual(spec.args.slice(0, 2), ['--profile', 'headless'])
-    assert.equal(spec.args.at(-1), '-')
-    const patchIndex = spec.args.indexOf('--patch')
-    assert.ok(patchIndex > 0 && patchIndex < spec.args.indexOf('--json'))
-    const settings = JSON.parse(readFileSync(join(jobDir, 'settings.yaml'), 'utf8'))
-    assert.deepEqual(settings['agent-default-model'], { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' })
-    assert.equal(settings.permission.defaultPreset, 'danger-full-access')
-    assert.ok(existsSync(join(jobDir, 'settings.patch.yml')))
-    assert.ok(!spawnSpec({ jobDir }).args.includes('--patch'))
-  } finally {
-    delete process.env.DSH_HOME
-    delete process.env.DSHO_DSH_BIN
-  }
-})
-
-test('a source checkout launches through its own tsx', () => {
-  process.env.DSHO_DSH_REPO = '/opt/dsh-checkout'
-  try {
-    const spec = spawnSpec({ jobDir: mkdtempSync(join(tmpdir(), 'dsho-job-')) })
-    assert.equal(spec.cmd, process.execPath)
-    assert.equal(spec.args[0], '--import')
-    assert.match(spec.args[1], /tsx\/dist\/esm\/index\.mjs$/)
-    assert.equal(spec.args[2], '/opt/dsh-checkout/apps/cli/src/bin.ts')
-    assert.equal(spec.env.TSX_TSCONFIG_PATH, '/opt/dsh-checkout/tsconfig.json')
-  } finally {
-    delete process.env.DSHO_DSH_REPO
-  }
+test('describeInput picks the argument a reader cares about', () => {
+  assert.equal(describeInput({ command: 'ls -la', description: 'List' }), 'ls -la')
+  assert.equal(describeInput({ queries: ['a', 'b'] }), 'a | b')
+  assert.equal(describeInput({ query: 'q' }), 'q')
+  assert.equal(describeInput({ url: 'https://example.com' }), 'https://example.com')
+  assert.equal(describeInput({ urls: ['https://a', 'https://b'] }), 'https://a https://b')
+  assert.equal(describeInput({ file_path: '/x/report.md', content: 'long' }), '/x/report.md')
+  assert.equal(describeInput({ pattern: '*.md' }), '*.md')
+  assert.equal(describeInput({ other: 1 }), '{"other":1}')
+  assert.equal(describeInput('raw text'), 'raw text')
+  assert.equal(describeInput(null), '')
 })

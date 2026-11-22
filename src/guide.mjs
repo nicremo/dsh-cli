@@ -73,6 +73,14 @@ workspace and session titles to look for.
 ## Models
 Default is the model in ~/.dsh/settings.yaml. Per job or batch: -m pro
 (deepseek-v4-pro) for hard analysis, -m v4-flash for volume, --effort off|low|high|max.
+dsho config set provider openrouter / dsho config set model v4-flash set the provider
+route and the default model for every job.
+
+## Sandbox
+Headless workers never wait for approvals: actions their sandbox forbids are rejected.
+--access read-only (research), workspace-write (writes files in the workspace) or full
+picks the sandbox per job; --access implies the headless backend. The presets limit
+writes only: workers can still read the user's files and use the network.
 
 ## References
 last = newest job, last-batch = newest batch, unique id prefixes, job or batch names.

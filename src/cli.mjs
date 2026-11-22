@@ -1,25 +1,25 @@
 // dsh-cli command line: parsing, command handlers, text and JSON output.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { collectBatch, fmtBytes, jobDuration, jobResult, listFiles } from './collect.mjs'
 import { cfg, CONFIG_KEYS, readConfig, setConfig } from './config.mjs'
-import { activeProfile, EFFORTS, resolveModel } from './dsh.mjs'
+import { activeProfile, EFFORTS, resolveAccess, resolveModel } from './dsh.mjs'
 import { parseLines, timeline } from './events.mjs'
 import { GUIDE } from './guide.mjs'
 import { defaultWorkspaceRoot, jobDir } from './paths.mjs'
-import { doctor, findPython, setupProfile } from './profile.mjs'
-import { cancelJob, createRunnableJob, installSignalForwarding, runJob, spawnDetached } from './runner.mjs'
+import { doctor, findPython, PLAYWRIGHT_HINT, setupProfile } from './profile.mjs'
+import { holdOwnerLock } from './owner.mjs'
+import { cancelJob, createRunnableJob, installSignalForwarding, isShuttingDown, runJob, spawnDetached } from './runner.mjs'
 import { installSkill } from './skills.mjs'
 import {
   ACTIVE, createBatch, listBatches, listJobs, readBatch, readJob, resolveRef, summarizeJobs, TERMINAL, updateBatch, updateJob,
 } from './store.mjs'
 import { cancelBatch, runBatch } from './supervisor.mjs'
 import { DEPTHS, MATERIAL_KINDS, materialsPrompt, researchPrompt, TEMPLATES, workdirHeader, workspaceAgentsMd } from './templates.mjs'
-import { DshoError, excerpt, fmtDuration, parseDuration, sleep, slug } from './util.mjs'
+import { DshoError, excerpt, expandHome, fmtDuration, parseDuration, sleep, slug } from './util.mjs'
 import * as web from './web.mjs'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
@@ -30,6 +30,14 @@ const WORKSPACE_MARKER = '.dsho-workspace'
 
 let JSON_MODE = false
 const print = (text = '') => process.stdout.write(text.endsWith('\n') ? text : text + '\n')
+
+/** Help text for `cmd --help` (code 0) or a missing/unknown subcommand (code 2), also as JSON. */
+function showHelp(text, code) {
+  if (!JSON_MODE) print(text)
+  else if (code === 0) print(JSON.stringify({ ok: true, help: text }, null, 2))
+  else print(JSON.stringify({ ok: false, error: 'missing or unknown subcommand', code, hint: text.split('\n')[0] }))
+  return code
+}
 
 function emit(data, text) {
   if (JSON_MODE) print(JSON.stringify({ ok: true, ...data }, null, 2))
@@ -57,18 +65,28 @@ const RUN_OPTS = {
   wait: { type: 'boolean', short: 'w' },
   'max-wait': { type: 'string' },
   backend: { type: 'string', short: 'b' },
+  access: { type: 'string' },
 }
 
 const BACKENDS = ['auto', 'web', 'headless']
 
-/** auto: the DSH web UI when it is running (live and grouped there), else headless. */
+/**
+ * Backend for new jobs. auto: the DSH web UI when it is running (live and grouped
+ * there), else headless; an auto web job falls back to headless when the UI fails
+ * before the task is sent. --access needs headless: the web API cannot set a
+ * session's permission preset.
+ */
 async function resolveBackend(values) {
-  const wanted = values.backend ?? cfg('backend') ?? 'auto'
-  if (!BACKENDS.includes(wanted)) throw new DshoError(`--backend must be one of ${BACKENDS.join(', ')}`, 2)
-  if (wanted === 'headless') return 'headless'
+  const choice = values.backend ?? cfg('backend') ?? 'auto'
+  if (!BACKENDS.includes(choice)) throw new DshoError(`--backend must be one of ${BACKENDS.join(', ')}`, 2)
+  const access = resolveAccess(values.access ?? cfg('access'))
+  if (access && values.access && choice === 'web') {
+    throw new DshoError('--access works with headless jobs only; the DSH web UI keeps the permission preset chosen there', 2, 'drop -b web, or set the preset in the UI')
+  }
+  if (choice === 'headless' || (access && values.access)) return { backend: 'headless', backendChoice: choice, access }
   const up = await web.available()
-  if (wanted === 'web' && !up) throw new DshoError(`DSH web UI at ${web.baseUrl()} is not reachable`, 5, 'dsho ui start, or use --backend headless')
-  return up ? 'web' : 'headless'
+  if (choice === 'web' && !up) throw new DshoError(`DSH web UI at ${web.baseUrl()} is not reachable`, 5, 'dsho ui start, or use --backend headless')
+  return { backend: up ? 'web' : 'headless', backendChoice: choice, access }
 }
 
 const backendLine = (backend, cwd, width = 11) =>
@@ -107,7 +125,6 @@ function validateModelOpts(values) {
 
 const timeoutSec = (values, fallback = 1800) => (values.timeout ? parseDuration(values.timeout) : fallback)
 const dateStamp = () => new Date().toISOString().slice(0, 10)
-const expandHome = (p) => p.replace(/^~(?=$|\/)/, homedir())
 
 /** True when dir or an ancestor already is a dsh-cli workspace. */
 function insideWorkspace(dir) {
@@ -121,28 +138,50 @@ function insideWorkspace(dir) {
 }
 
 /** Create dir and, unless it already sits in a workspace, mark it as one. */
-function ensureWorkspace(dir, { kind = 'general', description, force = false } = {}) {
-  const abs = resolve(dir)
-  mkdirSync(abs, { recursive: true })
-  if (!force && insideWorkspace(abs)) return { path: abs, created: false }
-  writeFileSync(join(abs, WORKSPACE_MARKER), JSON.stringify({ kind, createdAt: new Date().toISOString() }) + '\n')
+/**
+ * Create dir and, unless it already sits in a workspace (or `init` is set), mark it as one.
+ * An existing AGENTS.md is project knowledge and stays; `overwrite` replaces it after
+ * saving the old file as AGENTS.md.bak.
+ */
+function ensureWorkspace(dir, { kind = 'general', description, init = false, overwrite = false } = {}) {
+  mkdirSync(resolve(dir), { recursive: true })
+  const abs = canonical(dir)
   const agents = join(abs, 'AGENTS.md')
-  if (force || !existsSync(agents)) writeFileSync(agents, workspaceAgentsMd({ name: basename(abs), kind, description }))
-  return { path: abs, created: true }
+  if (!init && insideWorkspace(abs)) return { path: abs, created: false, agentsMd: 'kept' }
+  writeFileSync(join(abs, WORKSPACE_MARKER), JSON.stringify({ kind, createdAt: new Date().toISOString() }) + '\n')
+  let agentsMd = 'written'
+  if (existsSync(agents)) {
+    if (!overwrite) return { path: abs, created: true, agentsMd: 'kept' }
+    copyFileSync(agents, `${agents}.bak`)
+    agentsMd = 'replaced'
+  }
+  writeFileSync(agents, workspaceAgentsMd({ name: basename(abs), kind, description }))
+  return { path: abs, created: true, agentsMd }
+}
+
+/**
+ * The canonical path of an existing directory: symlinks resolved (macOS /var is
+ * /private/var), Windows short names expanded. dsh reports its working folder this way
+ * and the web UI keys workspaces by path, so jobs store the same spelling.
+ */
+function canonical(dir) {
+  try {
+    return realpathSync.native(resolve(dir))
+  } catch {
+    return resolve(dir)
+  }
 }
 
 /** -C wins; an existing directory stays untouched, a new one becomes a workspace. */
 function resolveWorkspace(cwdOpt, fallbackName, kind) {
   if (cwdOpt) {
     const abs = resolve(expandHome(cwdOpt))
-    if (!existsSync(abs)) ensureWorkspace(abs, { kind })
-    return abs
+    return existsSync(abs) ? canonical(abs) : ensureWorkspace(abs, { kind }).path
   }
   const abs = join(cfg('workspaces') || defaultWorkspaceRoot(), `${dateStamp()}-${fallbackName}`)
   let candidate = abs
   for (let i = 2; existsSync(candidate); i++) candidate = `${abs}-${i}`
-  ensureWorkspace(candidate, { kind })
-  return candidate
+  return ensureWorkspace(candidate, { kind }).path
 }
 
 // ------------------------------------------------------------ job views ----
@@ -241,7 +280,7 @@ function refJobs(ref) {
 }
 
 async function waitFor(refs, { timeoutMs, any = false } = {}) {
-  const deadline = timeoutMs ? Date.now() + timeoutMs : Infinity
+  const deadline = timeoutMs != null ? Date.now() + timeoutMs : Infinity
   const tty = process.stderr.isTTY && !JSON_MODE
   while (true) {
     const jobs = refs.flatMap(refJobs).filter(Boolean)
@@ -268,7 +307,7 @@ function startJob(fields, taskText, { header = true } = {}) {
   return readJob(job.id)
 }
 
-function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend }) {
+function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend, backendChoice, access }) {
   const batch = createBatch({ name, root, parallel, template, jobs: [] })
   const width = Math.max(2, String(tasks.length).length)
   const jobs = tasks.map((t, i) => {
@@ -284,6 +323,8 @@ function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, m
         template: t.template ?? template,
         prompt: t.prompt,
         backend,
+        backendChoice,
+        access,
         // Web sessions of one batch share the batch workspace directory.
         cwd: backend === 'web' ? root : outDir,
         outDir,
@@ -328,7 +369,9 @@ async function finishStart(ref, values, startedText) {
 // -------------------------------------------------------------- commands ----
 
 const BACKEND_HELP = `  -b, --backend <b>     auto (default): inside the running DSH web UI, else headless;
-                        web forces the UI, headless a separate dsh process`
+                        web forces the UI, headless a separate dsh process
+      --access <a>      headless sandbox: read-only, workspace-write or full
+                        (default: the dsh profile's preset; implies headless)`
 
 const HELP = {
   run: `dsho run <task...|-> [options]
@@ -382,15 +425,18 @@ ${BACKEND_HELP}`,
   Timeline of tool calls and answers. -f follows live until the job ends.`,
   files: `dsho files <ref> [--all]
   Files the job created or changed in its folder (--all: every file).`,
-  continue: `dsho continue <job> <follow-up...|-> [-w] [-t dur] [--max-wait dur]
-  Continues the job's dsh session with a follow-up task (same folder, same session).`,
+  continue: `dsho continue <job> <follow-up...|-> [-w] [-t dur] [--max-wait dur] [--access a]
+  Continues the job's dsh session with a follow-up task (same folder, same session).
+  The sandbox of the job carries over; --access read-only|workspace-write|full changes it
+  for the follow-up (headless jobs).`,
   cancel: `dsho cancel <ref>
   Cancels a job or every unfinished job of a batch.`,
   collect: `dsho collect <batch> [-o file]
   Writes <root>/INDEX.md (all answers, files, errors) and merges manifest.json and
   sources.json of all jobs.`,
-  ws: `dsho ws init <dir> [--kind research|materials|general] [--description text]
-  Creates a workspace: folder, marker .dsho-workspace and an AGENTS.md with conventions.`,
+  ws: `dsho ws init <dir> [--kind research|materials|general] [--description text] [--force]
+  Creates a workspace: folder, marker .dsho-workspace and an AGENTS.md with conventions.
+  An existing AGENTS.md is kept; --force replaces it and saves the old one as AGENTS.md.bak.`,
   capture: `dsho capture shot <url> -o <file.png> [--full] [--width 1440] [--height 900] [--wait 2] [--selector css]
 dsho capture scroll <url> -o <file.mp4> [--duration 12] [--width 1920] [--height 1080] [--fps 30] [--speed 450]
   Deterministic captures with Playwright (bundled Chromium). Prints JSON.
@@ -403,9 +449,10 @@ dsho ui login <url>              remember the token URL that \`dsh web\` printed
   skill: `dsho skill install [--agents claude,codex,pi] [--copy]
   Installs the dsh-orchestration skill into ~/.agents/skills (read by OpenCode and others)
   and links it into Claude Code, Codex and Pi when they are installed.`,
-  setup: `dsho setup [--mcp research|all|none|<ids>] [--from web] [--skills a,b|all] [--no-skill]
-  One-time setup: creates the dsh profile "orchestra" for headless jobs (MCP servers copied
-  from another profile, curated skills) and installs the agent skill.`,
+  setup: `dsho setup [--mcp research|all|none|<ids>] [--from web] [--skills a,b|all] [--no-skill] [--no-llm]
+  One-time setup: creates the dsh profile "orchestra" for headless jobs (MCP servers and model
+  provider settings copied from another profile, curated skills) and installs the agent skill.
+  --no-llm keeps the model settings of the shipped headless template.`,
   config: `dsho config                       show settings
 dsho config set <key> <value>      e.g. dsho config set dshRepo ~/deepseek-harness
 dsho config unset <key>
@@ -470,11 +517,12 @@ async function cmdRun(argv) {
     if (!MATERIAL_KINDS[kind]) throw new DshoError(`--kind must be one of ${Object.keys(MATERIAL_KINDS).join(', ')}`, 2)
     text = materialsPrompt(prompt, { kind, urls: values.url ?? [], count: Number(values.count ?? 6) })
   }
-  const backend = await resolveBackend(values)
+  const tSec = timeoutSec(values)
+  const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? slug(prompt, 32)
   const cwd = resolveWorkspace(values.cwd, name, template === 'raw' ? 'general' : template)
   const title = values.name ?? excerpt(prompt, 70)
-  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, model, effort, timeoutSec: timeoutSec(values) }, text)
+  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, backendChoice, access, model, effort, timeoutSec: tSec }, text)
   return finishStart({ kind: 'job', id: job.id }, values, () =>
     [
       `Job ${job.id} started (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -503,10 +551,11 @@ async function batchCommon(values, tasks, { template, defaultName, kind }) {
   const { model, effort } = validateModelOpts(values)
   const parallel = values.parallel ? Number(values.parallel) : Math.min(tasks.length, 10)
   if (!Number.isInteger(parallel) || parallel < 1) throw new DshoError('--parallel must be a positive number', 2)
-  const backend = await resolveBackend(values)
+  const tSec = timeoutSec(values)
+  const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? defaultName
   const root = resolveWorkspace(values.cwd, slug(name, 40), kind)
-  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: timeoutSec(values), model, effort, backend })
+  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend, backendChoice, access })
   return finishStart({ kind: 'batch', id: batch.id }, values, () =>
     [
       `Batch ${batch.id} started: ${tasks.length} jobs, ${parallel} in parallel (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -627,7 +676,7 @@ async function cmdWait(argv) {
   if (values.help) return print(HELP.wait), 0
   if (!positionals.length) throw new DshoError('wait needs at least one reference', 2)
   const refs = positionals.map(resolveRef)
-  const { jobs, timedOut } = await waitFor(refs, { timeoutMs: values.timeout ? parseDuration(values.timeout) * 1000 : undefined, any: values.any })
+  const { jobs, timedOut } = await waitFor(refs, { timeoutMs: values.timeout != null ? parseDuration(values.timeout) * 1000 : undefined, any: values.any })
   if (process.stderr.isTTY && !JSON_MODE) process.stderr.write('\r')
   const { exitCode } = waitOutcome(jobs, timedOut)
   emit({ timedOut, summary: summarizeJobs(jobs), jobs: jobs.map((j) => ({ ...jobView(j), result: j.status === 'done' ? jobResult(j.id) : null })) }, () => {
@@ -674,7 +723,8 @@ async function cmdLogs(argv) {
   const dir = jobDir(ref.id)
   if (values.stderr) {
     const file = join(dir, 'stderr.log')
-    print(existsSync(file) ? readFileSync(file, 'utf8') : '(empty)')
+    const stderr = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    emit({ job: ref.id, stderr }, stderr || '(empty)')
     return 0
   }
   const eventsFile = join(dir, 'events.jsonl')
@@ -717,8 +767,9 @@ async function cmdFiles(argv) {
 }
 
 async function cmdContinue(argv) {
-  const { values, positionals } = parse(argv, { wait: RUN_OPTS.wait, timeout: RUN_OPTS.timeout, 'max-wait': RUN_OPTS['max-wait'], file: { type: 'string', short: 'f' } })
+  const { values, positionals } = parse(argv, { wait: RUN_OPTS.wait, timeout: RUN_OPTS.timeout, 'max-wait': RUN_OPTS['max-wait'], access: RUN_OPTS.access, file: { type: 'string', short: 'f' } })
   if (values.help) return print(HELP.continue), 0
+  const accessOverride = resolveAccess(values.access)
   const [refText, ...rest] = positionals
   const ref = resolveRef(refText)
   if (ref.kind !== 'job') throw new DshoError('continue needs a job', 2)
@@ -728,11 +779,14 @@ async function cmdContinue(argv) {
   const prompt = taskFrom(rest, { file: values.file }).trim()
   if (!prompt) throw new DshoError('No follow-up task given', 2)
   const backend = parent.backend ?? 'headless'
+  if (accessOverride && backend === 'web') {
+    throw new DshoError('--access works with headless jobs only; this session lives in the DSH web UI', 2, 'change the permission preset in the UI')
+  }
   if (backend === 'web' && !(await web.available())) {
     throw new DshoError('The session lives in the DSH web UI, which is not reachable right now', 5, 'dsho ui start')
   }
   const job = startJob(
-    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
+    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, access: accessOverride ?? parent.access, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
     prompt,
     { header: false },
   )
@@ -768,25 +822,33 @@ async function cmdCollect(argv) {
 
 async function cmdWs(argv) {
   const [sub, ...rest] = argv
-  const { values, positionals } = parse(rest, { kind: { type: 'string' }, description: { type: 'string' } })
+  const { values, positionals } = parse(rest, { kind: { type: 'string' }, description: { type: 'string' }, force: { type: 'boolean' } })
   if (values.help || sub !== 'init') {
-    print(HELP.ws)
-    return sub === 'init' || values.help || sub === '--help' || sub === '-h' ? 0 : 2
+    return showHelp(HELP.ws, sub === 'init' || values.help || sub === '--help' || sub === '-h' ? 0 : 2)
   }
   if (!positionals[0]) throw new DshoError('ws init needs a folder', 2)
-  const res = ensureWorkspace(resolve(expandHome(positionals[0])), { kind: values.kind ?? 'general', description: values.description, force: true })
-  emit({ workspace: res.path, agentsMd: join(res.path, 'AGENTS.md') }, `Workspace ready: ${res.path}\n  Start: dsho run -C ${res.path} "task"`)
+  const res = ensureWorkspace(resolve(expandHome(positionals[0])), { kind: values.kind ?? 'general', description: values.description, init: true, overwrite: values.force })
+  const agentsMd = join(res.path, 'AGENTS.md')
+  const note = {
+    written: `  AGENTS.md: written (${agentsMd})`,
+    kept: '  AGENTS.md: existing file kept (--force replaces it and saves AGENTS.md.bak)',
+    replaced: '  AGENTS.md: replaced, previous version in AGENTS.md.bak',
+  }[res.agentsMd]
+  emit({ workspace: res.path, agentsMd, agentsMdAction: res.agentsMd }, `Workspace ready: ${res.path}\n${note}\n  Start: dsho run -C ${res.path} "task"`)
   return 0
 }
 
 async function cmdCapture(argv) {
-  if (!argv.length || argv[0] === '-h' || argv[0] === '--help') {
-    print(HELP.capture)
-    return argv.length ? 0 : 2
+  // capture always prints one JSON object, so --json changes nothing and is not passed on.
+  const args = argv.filter((a) => a !== '--json')
+  if (!args.length || args[0] === '-h' || args[0] === '--help') {
+    return showHelp(HELP.capture, args.length ? 0 : 2)
   }
   const { python, playwright } = findPython()
-  if (!playwright) throw new DshoError('Python Playwright not found', 5, 'pip install playwright && python3 -m playwright install chromium, or set DSHO_PYTHON')
-  const res = spawnSync(python, [CAPTURE_PY, ...argv.filter((a) => a !== '--json')], { stdio: 'inherit' })
+  if (!playwright) throw new DshoError('Python Playwright not found', 5, `${PLAYWRIGHT_HINT}, or set DSHO_PYTHON`)
+  // UTF-8 output: on Windows Python would otherwise print the JSON result in the ANSI code page.
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
+  const res = spawnSync(python, [CAPTURE_PY, ...args], { stdio: 'inherit', env, windowsHide: true })
   if (res.error) throw new DshoError(`cannot start ${python}: ${res.error.message}`, 5)
   return res.status ?? 1
 }
@@ -839,8 +901,7 @@ async function cmdSkill(argv) {
   const [sub, ...rest] = argv
   const { values } = parse(rest, { agents: { type: 'string' }, copy: { type: 'boolean' } })
   if (values.help || sub !== 'install') {
-    print(HELP.skill)
-    return sub === 'install' || values.help ? 0 : 2
+    return showHelp(HELP.skill, sub === 'install' || values.help ? 0 : 2)
   }
   const res = installSkill({ agents: values.agents?.split(',').map((a) => a.trim()), copy: values.copy })
   emit(res, () => [`Skill dsh-orchestration installed: ${res.canonical}`, ...res.rows.slice(1).map((r) => `  ${pad(r.agent, 8)} ${r.action}: ${r.path}`)].join('\n'))
@@ -848,15 +909,16 @@ async function cmdSkill(argv) {
 }
 
 async function cmdSetup(argv) {
-  const { values } = parse(argv, { mcp: { type: 'string' }, from: { type: 'string' }, skills: { type: 'string' }, 'no-skill': { type: 'boolean' } })
+  const { values } = parse(argv, { mcp: { type: 'string' }, from: { type: 'string' }, skills: { type: 'string' }, 'no-skill': { type: 'boolean' }, 'no-llm': { type: 'boolean' } })
   if (values.help) return print(HELP.setup), 0
-  const profile = setupProfile({ mcp: values.mcp ?? 'research', from: values.from ?? 'web', skills: values.skills })
+  const profile = setupProfile({ mcp: values.mcp ?? 'research', from: values.from ?? 'web', skills: values.skills, llm: !values['no-llm'] })
   const skill = values['no-skill'] ? null : installSkill({})
   const up = await web.available()
   emit({ profile, skill, webUi: up ? web.baseUrl() : null }, () =>
     [
       `dsh profile "${profile.profile}" ready: ${profile.profileDir}`,
       `  MCP servers: ${profile.mcpServers.join(', ') || 'none'}`,
+      `  Models:      ${profile.llm.length ? profile.llm.join(', ') : 'dsh defaults'}`,
       `  Skills:      ${profile.skillsDir ? `${profile.skills.length} curated in ${profile.skillsDir}` : 'dsh defaults'}`,
       ...profile.notes.map((n) => `  Note:        ${n}`),
       skill ? `Agent skill installed: ${skill.canonical}` : null,
@@ -923,10 +985,11 @@ export async function main(argv) {
   const [cmd, ...rest] = argv
   try {
     if (cmd === '__run-job' || cmd === '__run-batch') {
-      installSignalForwarding()
+      holdOwnerLock()
+      installSignalForwarding(cmd === '__run-batch' ? { batchId: rest[0] } : {})
       if (cmd === '__run-job') await runJob(rest[0])
       else await runBatch(rest[0])
-      return 0
+      return isShuttingDown() ? 130 : 0
     }
     if (!cmd || cmd === 'help' || cmd === '-h' || cmd === '--help') {
       const topic = cmd === 'help' ? rest[0] : null

@@ -3,8 +3,8 @@
 // profile (default: web) and a small curated skill set, which keeps the worker
 // prompt smaller, faster and cheaper than the full skill pool.
 import { spawnSync } from 'node:child_process'
-import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, chmodSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import yaml from 'js-yaml'
 import { cfg } from './config.mjs'
 import { activeProfile, dshCommand, readDshSettings, resolveDsh, which } from './dsh.mjs'
@@ -39,8 +39,13 @@ export function mcpFilter(mode = 'research') {
   return (row) => wanted.has(row.id) || wanted.has(row.config?.serverName)
 }
 
-/** Schema that round-trips dsh's `!!js` expression scalars unchanged. */
+/**
+ * Schema that round-trips dsh's `!!js` expression scalars unchanged. Memoized: loading and
+ * dumping must share one JsExpr class, or copied `!!js` values would dump as plain objects.
+ */
+let jsSchema
 function schemaWithJs() {
+  if (jsSchema) return jsSchema
   class JsExpr {
     constructor(src) {
       this.src = src
@@ -52,7 +57,7 @@ function schemaWithJs() {
     instanceOf: JsExpr,
     represent: (obj) => obj.src,
   })
-  return yaml.DEFAULT_SCHEMA.extend([jsType])
+  return (jsSchema = yaml.DEFAULT_SCHEMA.extend([jsType]))
 }
 
 /** MCP client insert rows of a dsh patch file that pass `filter`. Values are never printed. */
@@ -66,23 +71,93 @@ export function extractRows(patchText, filter) {
   return { rows, dump: (value) => yaml.dump(value, { schema, lineWidth: -1, noRefs: true }) }
 }
 
-export function renderPatch({ rows, dump, skillsDir, sourceProfile }) {
+/** Model provider entries (e.g. OpenRouter through llm-pi-ai) that workers need to reach the same models. */
+export const LLM_ENTRIES = ['llm-pi-ai', 'agent-default-model']
+
+/** Top-level patch entries with one of the given ids. Values are never printed. */
+export function extractEntries(patchText, ids) {
+  const doc = yaml.load(patchText, { schema: schemaWithJs() }) ?? []
+  return (Array.isArray(doc) ? doc : []).filter((entry) => ids.includes(entry?.id) && entry.config)
+}
+
+export function renderPatch({ rows, dump, skillsDir, sourceProfile, entries = [] }) {
   const header = `# Managed by dsh-cli (dsho setup). The next \`dsho setup\` overwrites this file.
-# MCP rows are copied from the "${sourceProfile}" profile.
+# MCP rows${entries.length ? ` and model provider settings (${entries.map((e) => e.id).join(', ')})` : ''} are copied from the "${sourceProfile}" profile.
 #
 # A curated skill folder instead of the full pool keeps the worker prompt small;
 # the .dsho-workspace marker lets workers in batch subfolders load the workspace AGENTS.md.
+# The headless template disables the credentials store; workers need it to find the API
+# keys saved in the DSH UI (Settings > Models).
 `
-  const base = []
+  const base = [{ id: 'credentials', disabled: false }, ...entries]
   if (skillsDir) base.push({ id: 'skill-filesystem', config: { includeDefaultRoots: false, customSkillDirs: [skillsDir], watch: false } })
   base.push({ id: 'agent-instructions', config: { maxBytes: 65536, projectRootMarkers: ['.git', '.dsho-workspace'] } })
   if (rows.length) base.push({ insert: rows })
   return header + '\n' + dump(base)
 }
 
+/** True when `path` is a link (symlink or junction) that dsh-cli made into the skill pool. */
+function isManagedLink(path) {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return false
+    const target = resolve(dirname(path), readlinkSync(path))
+    const pool = resolve(agentsSkillsDir())
+    return target === pool || target.startsWith(pool + sep)
+  } catch {
+    return false
+  }
+}
+
+/** Marker file inside a skill folder that dsh-cli copied because it could not link it. */
+const COPY_MARKER = '.dsho-copy'
+const isManagedCopy = (path) => existsSync(join(path, COPY_MARKER))
+
+/** Remove a link without touching what it points to (never recursive). */
+function removeLink(path) {
+  try {
+    unlinkSync(path)
+  } catch {
+    rmdirSync(path) // Windows directory junctions
+  }
+}
+
+/** Remove a skill entry dsh-cli made: a link, or a copy carrying the marker. */
+function removeManaged(path) {
+  if (isManagedLink(path)) removeLink(path)
+  else if (isManagedCopy(path)) rmSync(path, { recursive: true, force: true })
+}
+
+/**
+ * Link one skill into the curated folder. A junction needs no admin rights on Windows but
+ * cannot point to a network share; there (or wherever linking fails) the skill is copied
+ * and marked, so a later setup can refresh or remove the copy.
+ */
+function placeSkill(source, target) {
+  try {
+    symlinkSync(source, target, 'junction')
+    if (existsSync(join(target, 'SKILL.md')) || !existsSync(join(source, 'SKILL.md'))) return 'linked'
+    removeLink(target) // a junction that does not resolve (remote target)
+  } catch {
+    // Fall through to a copy.
+  }
+  cpSync(source, target, { recursive: true })
+  writeFileSync(join(target, COPY_MARKER), `copied by dsh-cli from ${source}\n`)
+  return 'copied'
+}
+
+/**
+ * Make the curated skill folder match `names`: link what is missing and remove links
+ * of an earlier selection. Only links into the skill pool are removed; anything else a
+ * user put there stays.
+ */
 function linkSkills(names) {
   const dir = curatedSkillsDir()
   mkdirSync(dir, { recursive: true })
+  const wanted = new Set(names)
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry)
+    if (!wanted.has(entry)) removeManaged(path)
+  }
   const linked = []
   for (const name of names) {
     const source = join(agentsSkillsDir(), name)
@@ -95,7 +170,12 @@ function linkSkills(names) {
     } catch {
       // Missing link.
     }
-    if (!present) symlinkSync(source, target)
+    // A copy can be stale: refresh it from the pool on every setup.
+    if (present && isManagedCopy(target)) {
+      rmSync(target, { recursive: true, force: true })
+      present = false
+    }
+    if (!present) placeSkill(source, target)
     linked.push(name)
   }
   return { dir, linked }
@@ -109,7 +189,7 @@ const tail = (text) => (text || '').split('\n').filter(Boolean).slice(-3).join('
  * @param options.from - profile whose MCP rows are copied (default web).
  * @param options.skills - comma list of skills, "all" for the full pool, or undefined for the curated set.
  */
-export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
+export function setupProfile({ mcp = 'research', from = 'web', skills, llm = true } = {}) {
   const dir = profileDir()
   const notes = []
   mkdirSync(home(), { recursive: true })
@@ -130,16 +210,19 @@ export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
 
   const sourcePatch = join(profileDir(from), 'cordis.patch.yml')
   let rows = []
+  let entries = []
   let dump
   if (existsSync(sourcePatch)) {
-    ;({ rows, dump } = extractRows(readFileSync(sourcePatch, 'utf8'), mcpFilter(mcp)))
+    const text = readFileSync(sourcePatch, 'utf8')
+    ;({ rows, dump } = extractRows(text, mcpFilter(mcp)))
     if (!rows.length && mcp !== 'none') notes.push(`no matching MCP servers in the "${from}" profile; workers use the built-in web_search and web_fetch`)
+    if (llm) entries = extractEntries(text, LLM_ENTRIES)
   } else {
     ;({ dump } = extractRows('[]', () => false))
     if (mcp !== 'none') notes.push(`profile "${from}" has no cordis.patch.yml; no MCP servers copied`)
   }
   const patchFile = join(dir, 'cordis.patch.yml')
-  writeFileSync(patchFile, renderPatch({ rows, dump, skillsDir, sourceProfile: from }), { mode: 0o600 })
+  writeFileSync(patchFile, renderPatch({ rows, dump, skillsDir, sourceProfile: from, entries }), { mode: 0o600 })
   // Copied MCP rows can carry API keys, so the file stays private.
   chmodSync(patchFile, 0o600)
 
@@ -151,22 +234,108 @@ export function setupProfile({ mcp = 'research', from = 'web', skills } = {}) {
     profile: PROFILE,
     profileDir: dir,
     mcpServers: rows.map((r) => r.config?.serverName ?? r.id),
+    llm: entries.map((e) => (e.id === 'agent-default-model' ? `${e.config.provider}/${e.config.model}` : e.id)),
     skillsDir,
     skills: linked,
     notes,
   }
 }
 
+const IS_WINDOWS = process.platform === 'win32'
+
+/** Python command name of this platform (`python` on Windows, `python3` elsewhere). */
+export const PYTHON = IS_WINDOWS ? 'python' : 'python3'
+
+/** How to install what `dsho capture` needs, phrased for this platform. */
+export const PLAYWRIGHT_HINT = `${PYTHON} -m pip install playwright && ${PYTHON} -m playwright install chromium`
+
 let pythonCache
 /** A python that can import playwright, for `dsho capture`. */
 export function findPython() {
   if (pythonCache) return pythonCache
-  const candidates = [cfg('python'), 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', '/opt/homebrew/bin/python3', '/usr/local/bin/python3'].filter(Boolean)
+  // Windows ships `python` (python.org, Microsoft Store) and the `py` launcher; there is no `python3.x`.
+  const platform = IS_WINDOWS
+    ? ['python', 'py', 'python3']
+    : ['python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', '/opt/homebrew/bin/python3', '/usr/local/bin/python3']
+  const candidates = [cfg('python'), ...platform].filter(Boolean)
   for (const python of candidates) {
-    const res = spawnSync(python, ['-c', 'import importlib.metadata as m; print(m.version("playwright"))'], { encoding: 'utf8', timeout: 15000 })
+    const res = spawnSync(python, ['-c', 'import importlib.metadata as m; print(m.version("playwright"))'], { encoding: 'utf8', timeout: 15000, windowsHide: true })
     if (res.status === 0) return (pythonCache = { python, playwright: res.stdout.trim() })
   }
-  return (pythonCache = { python: cfg('python') || 'python3', playwright: null })
+  return (pythonCache = { python: cfg('python') || PYTHON, playwright: null })
+}
+
+/**
+ * Windows: MSIX apps (the Claude desktop app, for example) virtualize %APPDATA%. A file
+ * written there from inside such an app really lands in
+ * %LOCALAPPDATA%\Packages\<package>\LocalCache\Roaming\..., visible only to that app.
+ * Returns the names of the packages that hold a private copy of `path`.
+ */
+export function msixCopies(path, { appData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA } = {}) {
+  if (process.platform !== 'win32' || !path || !appData || !localAppData) return []
+  const root = resolve(appData) + sep
+  if (!resolve(path).toLowerCase().startsWith(root.toLowerCase())) return []
+  const rel = resolve(path).slice(root.length)
+  const packages = join(localAppData, 'Packages')
+  let names = []
+  try {
+    names = readdirSync(packages)
+  } catch {
+    return []
+  }
+  return names.filter((name) => existsSync(join(packages, name, 'LocalCache', 'Roaming', rel)))
+}
+
+const KEY_NAME = /^[A-Z][A-Z0-9_]*_API_KEY$/
+
+/**
+ * Whether a composed profile (`dsh --dump-config` output) loads the credentials store:
+ * 'enabled', 'disabled', or null when the output has no credentials entry or is unreadable.
+ * `disabled` may be a `!!js` expression; only a literal true counts as disabled.
+ */
+export function credentialsStoreState(dumpText) {
+  try {
+    const doc = yaml.load(dumpText, { schema: schemaWithJs() })
+    const entries = Array.isArray(doc) ? doc : []
+    const entry = entries.find((e) => e?.id === 'credentials')
+    if (!entry) return null
+    return entry.disabled === true ? 'disabled' : 'enabled'
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Names (never values) of model API keys dsh can use: the environment, the credentials
+ * store the web UI writes (`refs` and `api-key` records in ~/.dsh/.credentials.yaml)
+ * and ~/.dsh/.env. A browser-session grant in the store is not an API key.
+ */
+export function apiKeySources() {
+  const found = new Map()
+  const add = (name, source) => {
+    if (KEY_NAME.test(name) && !found.has(name)) found.set(name, source)
+  }
+  for (const [name, value] of Object.entries(process.env)) if (value) add(name, 'environment')
+  try {
+    const doc = yaml.load(readFileSync(join(dshHome(), '.credentials.yaml'), 'utf8')) ?? {}
+    for (const [name, value] of Object.entries(doc.refs ?? {})) if (value) add(name, 'credentials store')
+    for (const [id, record] of Object.entries(doc.records ?? {})) {
+      if (record?.kind !== 'api-key') continue
+      const names = Object.keys(record.env ?? {})
+      for (const name of names.length ? names : [id.split('/').pop()]) add(name, 'credentials store')
+    }
+  } catch {
+    // No store yet.
+  }
+  try {
+    for (const line of readFileSync(join(dshHome(), '.env'), 'utf8').split(/\r?\n/)) {
+      const m = /^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*\S/.exec(line)
+      if (m) add(m[1], '~/.dsh/.env')
+    }
+  } catch {
+    // No .env file.
+  }
+  return [...found].map(([name, source]) => ({ name, source }))
 }
 
 export function doctor() {
@@ -178,6 +347,15 @@ export function doctor() {
 
   const dsh = resolveDsh()
   add('dsh', Boolean(dsh), dsh ? `${dsh.kind}: ${dsh.where}` : 'not found: npm install -g @deepseek-ai/dsh (or dsho config set dshBin|dshRepo <path>)')
+  const privateCopies = dsh ? msixCopies(dsh.where) : []
+  if (privateCopies.length) {
+    add(
+      'msix',
+      false,
+      `dsh sits in the private storage of the app ${privateCopies.join(', ')} (%LOCALAPPDATA%\\Packages\\...\\LocalCache): it was installed from inside that app and may not exist for a normal terminal. Install Node.js, dsh and dsh-cli from PowerShell or Windows Terminal`,
+      true,
+    )
+  }
 
   const profile = activeProfile()
   add('profile', profile === PROFILE, profile === PROFILE ? profileDir() : 'orchestra missing, headless jobs use the shipped headless profile (run dsho setup)', true)
@@ -190,20 +368,37 @@ export function doctor() {
   }
   const preset = settings?.permission?.defaultPreset ?? 'workspace-write (default)'
   const model = settings?.['agent-default-model']
-  add('permissions', preset === 'danger-full-access', `permission preset ${preset}${preset === 'danger-full-access' ? '' : ': unattended workers may stall on approval prompts'}`, preset !== 'danger-full-access')
+  // Headless workers run with --approval-policy never, so a stricter preset no longer stalls them:
+  // actions outside the sandbox are rejected and the model works around them.
+  add('permissions', true, `permission preset ${preset}; headless workers never wait for approvals (override per job with --access read-only|workspace-write|full)`, true)
   add('model', Boolean(model), model ? `${model.provider}/${model.model}${model.reasoningEffort ? ` (${model.reasoningEffort})` : ''}` : 'no default model in ~/.dsh/settings.yaml (dsh default applies)', true)
-  const hasCreds = existsSync(join(dshHome(), '.credentials.yaml')) || Boolean(process.env.DEEPSEEK_API_KEY)
-  add('credentials', hasCreds, hasCreds ? 'dsh credentials present' : 'no dsh credentials: log in once through dsh or set DEEPSEEK_API_KEY')
+  const keys = apiKeySources()
+  add(
+    'credentials',
+    keys.length > 0,
+    keys.length
+      ? `API keys: ${keys.map((k) => `${k.name} (${k.source})`).join(', ')}`
+      : 'no model API key: store one in the DSH UI (dsho ui start, Settings > Models) or set DEEPSEEK_API_KEY',
+  )
 
   if (dsh && dsh.kind !== 'custom') {
     const c = dshCommand(['--profile', profile, '--dump-config'])
     const t0 = Date.now()
-    const res = spawnSync(c.cmd, c.args, { env: c.env, cwd: home(), encoding: 'utf8', timeout: 120000 })
-    add('dsh-config', res.status === 0, res.status === 0 ? `profile ${profile} composes in ${Date.now() - t0} ms` : tail(res.stderr))
+    const res = spawnSync(c.cmd, c.args, { env: c.env, cwd: home(), encoding: 'utf8', timeout: 120000, windowsHide: true })
+    const why = tail(res.stderr) || res.error?.message || (res.signal ? `killed by ${res.signal}` : `exit code ${res.status}`)
+    add('dsh-config', res.status === 0, res.status === 0 ? `profile ${profile} composes in ${Date.now() - t0} ms` : why)
+    if (res.status === 0) {
+      const store = credentialsStoreState(res.stdout)
+      if (store === 'disabled') {
+        add('key-store', false, `profile ${profile} does not load the credentials store: dsh alone cannot see keys saved in the DSH UI (dsho passes refs keys on; run dsho setup to enable the store)`, true)
+      } else if (store === 'enabled') {
+        add('key-store', true, `profile ${profile} loads the credentials store`, true)
+      }
+    }
   }
 
   const py = findPython()
-  add('playwright', Boolean(py.playwright), py.playwright ? `Python Playwright ${py.playwright} (${py.python})` : 'not importable: pip install playwright && python3 -m playwright install chromium (needed for dsho capture)', true)
+  add('playwright', Boolean(py.playwright), py.playwright ? `Python Playwright ${py.playwright} (${py.python})` : `not importable: ${PLAYWRIGHT_HINT} (needed for dsho capture)`, true)
   for (const bin of ['ffmpeg', 'ffprobe', 'yt-dlp']) {
     const path = which(bin)
     add(bin, Boolean(path), path ?? 'not found', true)
