@@ -28,7 +28,7 @@ dsh 0.2.2-rc.5; CI covers Ubuntu, macOS and Windows on Node 22 and 24.
 - `last` picks the newest job also when several jobs were created in the same millisecond (#9).
 - `logs --stderr --json` prints a JSON object (#10).
 - `ws init` no longer overwrites an existing `AGENTS.md` (#2).
-- Install instructions: dsh-cli installs from GitHub (`npm install -g github:nicremo/dsh-cli`) until it is published on npm (#4).
+- Install instructions: the package is `@nicremo/dsh-cli` (npm rejects the unscoped name `dsh-cli`); `npm install -g github:nicremo/dsh-cli` installs the unreleased state (#4).
 - `npm test` runs on Windows (cmd.exe kept the single quotes of the test glob and ran no tests) (#11).
 
 ## [0.1.0] - 2026-10-07

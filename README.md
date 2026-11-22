@@ -4,6 +4,7 @@
 
 **Let Claude Code, Codex, OpenCode, Pi or any other agent run DeepSeek Harness sessions in parallel.**
 
+[![npm](https://img.shields.io/npm/v/@nicremo/dsh-cli?color=4D6BFE&label=npm)](https://www.npmjs.com/package/@nicremo/dsh-cli)
 [![CI](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/nicremo/dsh-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933)
@@ -63,11 +64,13 @@ flowchart LR
 ## Install
 
 ```sh
-npm install -g github:nicremo/dsh-cli
+npm install -g @nicremo/dsh-cli
 dsho setup
 ```
 
-dsh-cli is not on the npm registry yet, so npm installs it straight from GitHub (no build step involved). Update with the same command.
+Update with the same command. The latest unreleased state, including Windows support before 0.2.0 reaches npm, installs straight from GitHub: `npm install -g github:nicremo/dsh-cli` (no build step involved).
+
+On Windows, install Node.js, dsh and dsh-cli from a normal terminal (PowerShell or Windows Terminal). Apps packaged as MSIX, the Claude desktop app among them, virtualize `%APPDATA%`: a global `npm install` run from inside such an app lands in the app's private copy and is invisible everywhere else. `dsho doctor` warns when it finds dsh there.
 
 `dsho setup` creates the headless dsh profile `orchestra` and installs the `dsh-orchestration` skill into `~/.agents/skills` (read by OpenCode and other harnesses) with links for Claude Code, Codex and Pi when they are installed. Run `dsho doctor` to check everything.
 
