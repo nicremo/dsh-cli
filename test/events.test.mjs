@@ -60,7 +60,7 @@ test('spawnSpec honours DSHO_DSH_CMD and session ids', () => {
   try {
     const spec = spawnSpec({ sessionId: 'session-1', jobDir: '/tmp' })
     assert.equal(spec.cmd, '/bin/fake')
-    assert.deepEqual(spec.args, ['--json', '--session-id', 'session-1', '-'])
+    assert.deepEqual(spec.args, ['--json', '--session-id', 'session-1', '--approval-policy', 'never', '-'])
   } finally {
     delete process.env.DSHO_DSH_CMD
   }

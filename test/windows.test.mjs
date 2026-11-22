@@ -61,7 +61,7 @@ test('DSHO_DSH_CMD may be a script that runs through node', () => {
   try {
     const spec = spawnSpec({ sessionId: 'session-1', jobDir: tmpdir() })
     assert.equal(spec.cmd, process.execPath)
-    assert.deepEqual(spec.args, [process.env.DSHO_DSH_CMD, '--json', '--session-id', 'session-1', '-'])
+    assert.deepEqual(spec.args, [process.env.DSHO_DSH_CMD, '--json', '--session-id', 'session-1', '--approval-policy', 'never', '-'])
   } finally {
     if (previous === undefined) delete process.env.DSHO_DSH_CMD
     else process.env.DSHO_DSH_CMD = previous

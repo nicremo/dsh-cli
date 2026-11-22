@@ -184,12 +184,38 @@ function writeSettingsOverride(jobDir, { model, effort }) {
   return patchPath
 }
 
+/** `--access` values and the dsh permission preset each one selects. */
+export const ACCESS_MODES = {
+  'read-only': 'read-only',
+  'workspace-write': 'workspace-write',
+  full: 'danger-full-access',
+  'danger-full-access': 'danger-full-access',
+}
+
+/** dsh permission preset for an `--access` value, or null for the profile default. */
+export function resolveAccess(value) {
+  if (value == null || value === '') return null
+  const preset = ACCESS_MODES[value]
+  if (!preset) throw new DshoError(`--access must be one of read-only, workspace-write, full`, 2)
+  return preset
+}
+
 /**
  * Command, args and env for one headless run. The task always goes through
  * stdin (positional `-`), so leading dashes and long prompts are safe.
+ *
+ * Workers run unattended, so approvals are never asked: an action that needs one
+ * is rejected and the model is told so, instead of the worker waiting forever.
+ * `access` selects the dsh permission preset (sandbox) for this run.
  */
-export function spawnSpec({ sessionId, model, effort, jobDir }) {
-  const tail = ['--json', ...(sessionId ? ['--session-id', sessionId] : []), '-']
+export function spawnSpec({ sessionId, model, effort, jobDir, access }) {
+  const tail = [
+    '--json',
+    ...(sessionId ? ['--session-id', sessionId] : []),
+    ...(access ? ['--permission-mode', access] : []),
+    '--approval-policy', 'never',
+    '-',
+  ]
   const dsh = requireDsh()
   if (dsh.kind === 'custom') return { cmd: dsh.cmd, args: [...dsh.prefix, ...tail], env: { ...process.env }, profile: 'custom' }
   const profile = activeProfile()

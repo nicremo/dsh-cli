@@ -1,17 +1,17 @@
 // dsh-cli command line: parsing, command handlers, text and JSON output.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { collectBatch, fmtBytes, jobDuration, jobResult, listFiles } from './collect.mjs'
 import { cfg, CONFIG_KEYS, readConfig, setConfig } from './config.mjs'
-import { activeProfile, EFFORTS, resolveModel } from './dsh.mjs'
+import { activeProfile, EFFORTS, resolveAccess, resolveModel } from './dsh.mjs'
 import { parseLines, timeline } from './events.mjs'
 import { GUIDE } from './guide.mjs'
 import { defaultWorkspaceRoot, jobDir } from './paths.mjs'
 import { doctor, findPython, PLAYWRIGHT_HINT, setupProfile } from './profile.mjs'
-import { cancelJob, createRunnableJob, installSignalForwarding, runJob, spawnDetached } from './runner.mjs'
+import { cancelJob, createRunnableJob, installSignalForwarding, isShuttingDown, runJob, spawnDetached } from './runner.mjs'
 import { installSkill } from './skills.mjs'
 import {
   ACTIVE, createBatch, listBatches, listJobs, readBatch, readJob, resolveRef, summarizeJobs, TERMINAL, updateBatch, updateJob,
@@ -56,18 +56,28 @@ const RUN_OPTS = {
   wait: { type: 'boolean', short: 'w' },
   'max-wait': { type: 'string' },
   backend: { type: 'string', short: 'b' },
+  access: { type: 'string' },
 }
 
 const BACKENDS = ['auto', 'web', 'headless']
 
-/** auto: the DSH web UI when it is running (live and grouped there), else headless. */
+/**
+ * Backend for new jobs. auto: the DSH web UI when it is running (live and grouped
+ * there), else headless; an auto web job falls back to headless when the UI fails
+ * before the task is sent. --access needs headless: the web API cannot set a
+ * session's permission preset.
+ */
 async function resolveBackend(values) {
-  const wanted = values.backend ?? cfg('backend') ?? 'auto'
-  if (!BACKENDS.includes(wanted)) throw new DshoError(`--backend must be one of ${BACKENDS.join(', ')}`, 2)
-  if (wanted === 'headless') return 'headless'
+  const choice = values.backend ?? cfg('backend') ?? 'auto'
+  if (!BACKENDS.includes(choice)) throw new DshoError(`--backend must be one of ${BACKENDS.join(', ')}`, 2)
+  const access = resolveAccess(values.access ?? cfg('access'))
+  if (access && values.access && choice === 'web') {
+    throw new DshoError('--access works with headless jobs only; the DSH web UI keeps the permission preset chosen there', 2, 'drop -b web, or set the preset in the UI')
+  }
+  if (choice === 'headless' || (access && values.access)) return { backend: 'headless', backendChoice: choice, access }
   const up = await web.available()
-  if (wanted === 'web' && !up) throw new DshoError(`DSH web UI at ${web.baseUrl()} is not reachable`, 5, 'dsho ui start, or use --backend headless')
-  return up ? 'web' : 'headless'
+  if (choice === 'web' && !up) throw new DshoError(`DSH web UI at ${web.baseUrl()} is not reachable`, 5, 'dsho ui start, or use --backend headless')
+  return { backend: up ? 'web' : 'headless', backendChoice: choice, access }
 }
 
 const backendLine = (backend, cwd, width = 11) =>
@@ -119,14 +129,25 @@ function insideWorkspace(dir) {
 }
 
 /** Create dir and, unless it already sits in a workspace, mark it as one. */
-function ensureWorkspace(dir, { kind = 'general', description, force = false } = {}) {
+/**
+ * Create dir and, unless it already sits in a workspace (or `init` is set), mark it as one.
+ * An existing AGENTS.md is project knowledge and stays; `overwrite` replaces it after
+ * saving the old file as AGENTS.md.bak.
+ */
+function ensureWorkspace(dir, { kind = 'general', description, init = false, overwrite = false } = {}) {
   const abs = resolve(dir)
   mkdirSync(abs, { recursive: true })
-  if (!force && insideWorkspace(abs)) return { path: abs, created: false }
-  writeFileSync(join(abs, WORKSPACE_MARKER), JSON.stringify({ kind, createdAt: new Date().toISOString() }) + '\n')
   const agents = join(abs, 'AGENTS.md')
-  if (force || !existsSync(agents)) writeFileSync(agents, workspaceAgentsMd({ name: basename(abs), kind, description }))
-  return { path: abs, created: true }
+  if (!init && insideWorkspace(abs)) return { path: abs, created: false, agentsMd: 'kept' }
+  writeFileSync(join(abs, WORKSPACE_MARKER), JSON.stringify({ kind, createdAt: new Date().toISOString() }) + '\n')
+  let agentsMd = 'written'
+  if (existsSync(agents)) {
+    if (!overwrite) return { path: abs, created: true, agentsMd: 'kept' }
+    copyFileSync(agents, `${agents}.bak`)
+    agentsMd = 'replaced'
+  }
+  writeFileSync(agents, workspaceAgentsMd({ name: basename(abs), kind, description }))
+  return { path: abs, created: true, agentsMd }
 }
 
 /** -C wins; an existing directory stays untouched, a new one becomes a workspace. */
@@ -266,7 +287,7 @@ function startJob(fields, taskText, { header = true } = {}) {
   return readJob(job.id)
 }
 
-function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend }) {
+function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, model, effort, backend, backendChoice, access }) {
   const batch = createBatch({ name, root, parallel, template, jobs: [] })
   const width = Math.max(2, String(tasks.length).length)
   const jobs = tasks.map((t, i) => {
@@ -282,6 +303,8 @@ function startBatch({ name, root, parallel, template, tasks, timeoutSec: tSec, m
         template: t.template ?? template,
         prompt: t.prompt,
         backend,
+        backendChoice,
+        access,
         // Web sessions of one batch share the batch workspace directory.
         cwd: backend === 'web' ? root : outDir,
         outDir,
@@ -326,7 +349,9 @@ async function finishStart(ref, values, startedText) {
 // -------------------------------------------------------------- commands ----
 
 const BACKEND_HELP = `  -b, --backend <b>     auto (default): inside the running DSH web UI, else headless;
-                        web forces the UI, headless a separate dsh process`
+                        web forces the UI, headless a separate dsh process
+      --access <a>      headless sandbox: read-only, workspace-write or full
+                        (default: the dsh profile's preset; implies headless)`
 
 const HELP = {
   run: `dsho run <task...|-> [options]
@@ -387,8 +412,9 @@ ${BACKEND_HELP}`,
   collect: `dsho collect <batch> [-o file]
   Writes <root>/INDEX.md (all answers, files, errors) and merges manifest.json and
   sources.json of all jobs.`,
-  ws: `dsho ws init <dir> [--kind research|materials|general] [--description text]
-  Creates a workspace: folder, marker .dsho-workspace and an AGENTS.md with conventions.`,
+  ws: `dsho ws init <dir> [--kind research|materials|general] [--description text] [--force]
+  Creates a workspace: folder, marker .dsho-workspace and an AGENTS.md with conventions.
+  An existing AGENTS.md is kept; --force replaces it and saves the old one as AGENTS.md.bak.`,
   capture: `dsho capture shot <url> -o <file.png> [--full] [--width 1440] [--height 900] [--wait 2] [--selector css]
 dsho capture scroll <url> -o <file.mp4> [--duration 12] [--width 1920] [--height 1080] [--fps 30] [--speed 450]
   Deterministic captures with Playwright (bundled Chromium). Prints JSON.
@@ -469,11 +495,11 @@ async function cmdRun(argv) {
     if (!MATERIAL_KINDS[kind]) throw new DshoError(`--kind must be one of ${Object.keys(MATERIAL_KINDS).join(', ')}`, 2)
     text = materialsPrompt(prompt, { kind, urls: values.url ?? [], count: Number(values.count ?? 6) })
   }
-  const backend = await resolveBackend(values)
+  const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? slug(prompt, 32)
   const cwd = resolveWorkspace(values.cwd, name, template === 'raw' ? 'general' : template)
   const title = values.name ?? excerpt(prompt, 70)
-  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, model, effort, timeoutSec: timeoutSec(values) }, text)
+  const job = startJob({ name, title, template, prompt, cwd, outDir: cwd, backend, backendChoice, access, model, effort, timeoutSec: timeoutSec(values) }, text)
   return finishStart({ kind: 'job', id: job.id }, values, () =>
     [
       `Job ${job.id} started (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -502,10 +528,10 @@ async function batchCommon(values, tasks, { template, defaultName, kind }) {
   const { model, effort } = validateModelOpts(values)
   const parallel = values.parallel ? Number(values.parallel) : Math.min(tasks.length, 10)
   if (!Number.isInteger(parallel) || parallel < 1) throw new DshoError('--parallel must be a positive number', 2)
-  const backend = await resolveBackend(values)
+  const { backend, backendChoice, access } = await resolveBackend(values)
   const name = values.name ?? defaultName
   const root = resolveWorkspace(values.cwd, slug(name, 40), kind)
-  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: timeoutSec(values), model, effort, backend })
+  const batch = startBatch({ name, root, parallel, template, tasks, timeoutSec: timeoutSec(values), model, effort, backend, backendChoice, access })
   return finishStart({ kind: 'batch', id: batch.id }, values, () =>
     [
       `Batch ${batch.id} started: ${tasks.length} jobs, ${parallel} in parallel (${backend === 'web' ? 'in the DSH web UI' : `headless, dsh profile ${activeProfile()}`})`,
@@ -673,7 +699,8 @@ async function cmdLogs(argv) {
   const dir = jobDir(ref.id)
   if (values.stderr) {
     const file = join(dir, 'stderr.log')
-    print(existsSync(file) ? readFileSync(file, 'utf8') : '(empty)')
+    const stderr = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    emit({ job: ref.id, stderr }, stderr || '(empty)')
     return 0
   }
   const eventsFile = join(dir, 'events.jsonl')
@@ -731,7 +758,7 @@ async function cmdContinue(argv) {
     throw new DshoError('The session lives in the DSH web UI, which is not reachable right now', 5, 'dsho ui start')
   }
   const job = startJob(
-    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
+    { name: `${parent.name ?? parent.id}+`, title: parent.title, template: 'raw', prompt, backend, cwd: parent.cwd, outDir: parent.outDir ?? parent.cwd, web: parent.web, access: parent.access, model: parent.model, effort: parent.effort, timeoutSec: timeoutSec(values, parent.timeoutSec), parent: parent.id, resume: parent.sessionId },
     prompt,
     { header: false },
   )
@@ -767,14 +794,20 @@ async function cmdCollect(argv) {
 
 async function cmdWs(argv) {
   const [sub, ...rest] = argv
-  const { values, positionals } = parse(rest, { kind: { type: 'string' }, description: { type: 'string' } })
+  const { values, positionals } = parse(rest, { kind: { type: 'string' }, description: { type: 'string' }, force: { type: 'boolean' } })
   if (values.help || sub !== 'init') {
     print(HELP.ws)
     return sub === 'init' || values.help || sub === '--help' || sub === '-h' ? 0 : 2
   }
   if (!positionals[0]) throw new DshoError('ws init needs a folder', 2)
-  const res = ensureWorkspace(resolve(expandHome(positionals[0])), { kind: values.kind ?? 'general', description: values.description, force: true })
-  emit({ workspace: res.path, agentsMd: join(res.path, 'AGENTS.md') }, `Workspace ready: ${res.path}\n  Start: dsho run -C ${res.path} "task"`)
+  const res = ensureWorkspace(resolve(expandHome(positionals[0])), { kind: values.kind ?? 'general', description: values.description, init: true, overwrite: values.force })
+  const agentsMd = join(res.path, 'AGENTS.md')
+  const note = {
+    written: `  AGENTS.md: written (${agentsMd})`,
+    kept: '  AGENTS.md: existing file kept (--force replaces it and saves AGENTS.md.bak)',
+    replaced: '  AGENTS.md: replaced, previous version in AGENTS.md.bak',
+  }[res.agentsMd]
+  emit({ workspace: res.path, agentsMd, agentsMdAction: res.agentsMd }, `Workspace ready: ${res.path}\n${note}\n  Start: dsho run -C ${res.path} "task"`)
   return 0
 }
 
@@ -925,10 +958,10 @@ export async function main(argv) {
   const [cmd, ...rest] = argv
   try {
     if (cmd === '__run-job' || cmd === '__run-batch') {
-      installSignalForwarding()
+      installSignalForwarding(cmd === '__run-batch' ? { batchId: rest[0] } : {})
       if (cmd === '__run-job') await runJob(rest[0])
       else await runBatch(rest[0])
-      return 0
+      return isShuttingDown() ? 130 : 0
     }
     if (!cmd || cmd === 'help' || cmd === '-h' || cmd === '--help') {
       const topic = cmd === 'help' ? rest[0] : null

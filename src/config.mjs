@@ -13,6 +13,7 @@ export const CONFIG_KEYS = {
   python: { env: 'DSHO_PYTHON', help: 'python with playwright for dsho capture' },
   provider: { env: 'DSHO_PROVIDER', help: 'model provider route for workers, e.g. openrouter (default: dsh settings, else deepseek-official)' },
   model: { env: 'DSHO_MODEL', help: 'default model for jobs without -m, e.g. v4-flash' },
+  access: { env: 'DSHO_ACCESS', help: 'sandbox for headless workers: read-only | workspace-write | full (default: dsh profile preset)' },
 }
 
 const file = () => join(home(), 'config.json')
