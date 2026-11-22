@@ -22,10 +22,18 @@ export class DshoError extends Error {
 
 const B36 = '0123456789abcdefghijklmnopqrstuvwxyz'
 
-/** Time-ordered short id, e.g. `j-mgf3k2ab7x9`. */
+let lastIdTime = 0
+
+/**
+ * Time-ordered short id, e.g. `j-mgf3k2ab7x9`. The time part never repeats within a
+ * process (a batch creates many jobs in one millisecond), so ids sort in creation
+ * order and `last` is unambiguous.
+ */
 export function newId(prefix) {
+  const time = Math.max(Date.now(), lastIdTime + 1)
+  lastIdTime = time
   const rand = [...randomBytes(4)].map((b) => B36[b % 36]).join('')
-  return `${prefix}-${Date.now().toString(36)}${rand}`
+  return `${prefix}-${time.toString(36)}${rand}`
 }
 
 /** Parse `90s`, `20m`, `1.5h` or bare seconds into seconds. */
