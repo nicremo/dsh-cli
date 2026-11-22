@@ -230,6 +230,41 @@ export function findPython() {
   return (pythonCache = { python: cfg('python') || PYTHON, playwright: null })
 }
 
+const KEY_NAME = /^[A-Z][A-Z0-9_]*_API_KEY$/
+
+/**
+ * Names (never values) of model API keys dsh can use: the environment, the credentials
+ * store the web UI writes (`refs` and `api-key` records in ~/.dsh/.credentials.yaml)
+ * and ~/.dsh/.env. A browser-session grant in the store is not an API key.
+ */
+export function apiKeySources() {
+  const found = new Map()
+  const add = (name, source) => {
+    if (KEY_NAME.test(name) && !found.has(name)) found.set(name, source)
+  }
+  for (const [name, value] of Object.entries(process.env)) if (value) add(name, 'environment')
+  try {
+    const doc = yaml.load(readFileSync(join(dshHome(), '.credentials.yaml'), 'utf8')) ?? {}
+    for (const [name, value] of Object.entries(doc.refs ?? {})) if (value) add(name, 'credentials store')
+    for (const [id, record] of Object.entries(doc.records ?? {})) {
+      if (record?.kind !== 'api-key') continue
+      const names = Object.keys(record.env ?? {})
+      for (const name of names.length ? names : [id.split('/').pop()]) add(name, 'credentials store')
+    }
+  } catch {
+    // No store yet.
+  }
+  try {
+    for (const line of readFileSync(join(dshHome(), '.env'), 'utf8').split(/\r?\n/)) {
+      const m = /^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*\S/.exec(line)
+      if (m) add(m[1], '~/.dsh/.env')
+    }
+  } catch {
+    // No .env file.
+  }
+  return [...found].map(([name, source]) => ({ name, source }))
+}
+
 export function doctor() {
   const checks = []
   const add = (name, ok, detail, optional = false) => checks.push({ name, ok: Boolean(ok), detail, optional })
@@ -255,8 +290,14 @@ export function doctor() {
   // actions outside the sandbox are rejected and the model works around them.
   add('permissions', true, `permission preset ${preset}; headless workers never wait for approvals (override per job with --access read-only|workspace-write|full)`, true)
   add('model', Boolean(model), model ? `${model.provider}/${model.model}${model.reasoningEffort ? ` (${model.reasoningEffort})` : ''}` : 'no default model in ~/.dsh/settings.yaml (dsh default applies)', true)
-  const hasCreds = existsSync(join(dshHome(), '.credentials.yaml')) || Boolean(process.env.DEEPSEEK_API_KEY)
-  add('credentials', hasCreds, hasCreds ? 'dsh credentials present' : 'no dsh credentials: log in once through dsh or set DEEPSEEK_API_KEY')
+  const keys = apiKeySources()
+  add(
+    'credentials',
+    keys.length > 0,
+    keys.length
+      ? `API keys: ${keys.map((k) => `${k.name} (${k.source})`).join(', ')}`
+      : 'no model API key: store one in the DSH UI (dsho ui start, Settings > Models) or set DEEPSEEK_API_KEY',
+  )
 
   if (dsh && dsh.kind !== 'custom') {
     const c = dshCommand(['--profile', profile, '--dump-config'])

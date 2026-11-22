@@ -89,8 +89,10 @@ CONSENT_CSS = """
 .fc-consent-root, #cmpbox, #cmpbox2, .cmp-root, #qc-cmp2-container, .qc-cmp2-container,
 #truste-consent-track, .truste_box_overlay, #cookie-banner, .cookie-banner, #cookiebanner,
 .cookie-consent, #cookie-consent, [aria-label='Cookie banner'] { display: none !important; }
-html, body { overflow: auto !important; position: static !important; }
+html, body { overflow: visible !important; position: static !important; }
 """
+# overflow:visible, not auto: with auto on both html and body, body becomes its own
+# scroll box, window.scrollTo stops working and every scroll video is a still image.
 
 CLOSE_SELECTORS = [
     "[role='dialog'] [aria-label='Schließen']",
@@ -125,7 +127,12 @@ HIDE_OVERLAYS_JS = """
     el.style.setProperty('display', 'none', 'important');
     hidden++;
   }
-  for (const node of [document.documentElement, document.body]) node.style.setProperty('overflow', 'auto', 'important');
+  // Modals lock scrolling with overflow:hidden on html or body. Unlock only what is
+  // locked, and keep the viewport as the scroller: overflow:auto on both elements
+  // would turn body into its own scroll box, and window.scrollTo would stop working.
+  const locked = (node) => /hidden|clip/.test(getComputedStyle(node).overflowY);
+  if (locked(document.documentElement)) document.documentElement.style.setProperty('overflow', 'visible', 'important');
+  if (document.body && locked(document.body)) document.body.style.setProperty('overflow', 'visible', 'important');
   return hidden;
 }
 """
