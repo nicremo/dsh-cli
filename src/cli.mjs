@@ -403,9 +403,10 @@ dsho ui login <url>              remember the token URL that \`dsh web\` printed
   skill: `dsho skill install [--agents claude,codex,pi] [--copy]
   Installs the dsh-orchestration skill into ~/.agents/skills (read by OpenCode and others)
   and links it into Claude Code, Codex and Pi when they are installed.`,
-  setup: `dsho setup [--mcp research|all|none|<ids>] [--from web] [--skills a,b|all] [--no-skill]
-  One-time setup: creates the dsh profile "orchestra" for headless jobs (MCP servers copied
-  from another profile, curated skills) and installs the agent skill.`,
+  setup: `dsho setup [--mcp research|all|none|<ids>] [--from web] [--skills a,b|all] [--no-skill] [--no-llm]
+  One-time setup: creates the dsh profile "orchestra" for headless jobs (MCP servers and model
+  provider settings copied from another profile, curated skills) and installs the agent skill.
+  --no-llm keeps the model settings of the shipped headless template.`,
   config: `dsho config                       show settings
 dsho config set <key> <value>      e.g. dsho config set dshRepo ~/deepseek-harness
 dsho config unset <key>
@@ -848,15 +849,16 @@ async function cmdSkill(argv) {
 }
 
 async function cmdSetup(argv) {
-  const { values } = parse(argv, { mcp: { type: 'string' }, from: { type: 'string' }, skills: { type: 'string' }, 'no-skill': { type: 'boolean' } })
+  const { values } = parse(argv, { mcp: { type: 'string' }, from: { type: 'string' }, skills: { type: 'string' }, 'no-skill': { type: 'boolean' }, 'no-llm': { type: 'boolean' } })
   if (values.help) return print(HELP.setup), 0
-  const profile = setupProfile({ mcp: values.mcp ?? 'research', from: values.from ?? 'web', skills: values.skills })
+  const profile = setupProfile({ mcp: values.mcp ?? 'research', from: values.from ?? 'web', skills: values.skills, llm: !values['no-llm'] })
   const skill = values['no-skill'] ? null : installSkill({})
   const up = await web.available()
   emit({ profile, skill, webUi: up ? web.baseUrl() : null }, () =>
     [
       `dsh profile "${profile.profile}" ready: ${profile.profileDir}`,
       `  MCP servers: ${profile.mcpServers.join(', ') || 'none'}`,
+      `  Models:      ${profile.llm.length ? profile.llm.join(', ') : 'dsh defaults'}`,
       `  Skills:      ${profile.skillsDir ? `${profile.skills.length} curated in ${profile.skillsDir}` : 'dsh defaults'}`,
       ...profile.notes.map((n) => `  Note:        ${n}`),
       skill ? `Agent skill installed: ${skill.canonical}` : null,

@@ -73,6 +73,8 @@ workspace and session titles to look for.
 ## Models
 Default is the model in ~/.dsh/settings.yaml. Per job or batch: -m pro
 (deepseek-v4-pro) for hard analysis, -m v4-flash for volume, --effort off|low|high|max.
+dsho config set provider openrouter / dsho config set model v4-flash set the provider
+route and the default model for every job.
 
 ## References
 last = newest job, last-batch = newest batch, unique id prefixes, job or batch names.

@@ -278,7 +278,7 @@ export async function startServer({ port = 3080, timeoutMs = 120000 } = {}) {
   mkdirSync(logsDir(), { recursive: true })
   const logFile = join(logsDir(), 'dsh-web.log')
   const fd = openSync(logFile, 'w')
-  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', fd, fd], env, cwd: homedir() })
+  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', fd, fd], env, cwd: homedir(), windowsHide: true })
   closeSync(fd)
   child.unref()
   const deadline = Date.now() + timeoutMs

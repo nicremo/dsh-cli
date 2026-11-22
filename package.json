@@ -47,7 +47,7 @@
     "node": ">=22.19"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=4 'test/**/*.test.mjs'"
+    "test": "node --test --test-concurrency=4 \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

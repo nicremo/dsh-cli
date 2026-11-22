@@ -57,7 +57,7 @@ flowchart LR
 - Node.js `>=22.19`
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), installed with `npm install -g @deepseek-ai/dsh` (or a source checkout), logged in once
 - Optional, for `dsho capture`: Python 3 with Playwright (`pip install playwright && python3 -m playwright install chromium`) and ffmpeg
-- macOS or Linux
+- macOS, Linux or Windows. On Windows, `dshBin` may point at a `.cmd` shim: npm's `dsh.cmd` or the CLI bundled with the DeepSeek Harness desktop app (`%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`). dsh-cli reads the shim and starts its script directly, since Node cannot spawn `.cmd` files without a shell.
 
 ## Install
 
@@ -151,8 +151,11 @@ When the web UI is reachable, dsh-cli talks to its HTTP API (`POST /api/<namespa
 Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho setup` builds that profile from the shipped headless template plus:
 
 - MCP servers copied from another profile (default `web`): `--mcp research` (firecrawl, Brave, context7, Exa, Tavily, Perplexity, Jina and similar; default), `all`, `none` or a comma list of ids. Copied rows can contain API keys, so the profile file is written with mode 0600 and nothing is printed.
+- The model provider settings of the same profile (`llm-pi-ai` with its provider routes, `agent-default-model`), so workers reach the models you configured in the app, for example through OpenRouter. `--no-llm` keeps the template's settings.
 - A curated skill folder (`~/.dsh/skills-orchestra`, symlinks into `~/.agents/skills`) instead of your whole skill pool, which keeps the worker prompt about a third smaller. `--skills a,b,c` picks others, `--skills all` keeps dsh defaults.
 - `.dsho-workspace` as an extra project root marker, so workers in batch subfolders still load the workspace `AGENTS.md`.
+
+Headless dsh reads provider keys (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, ...) only from the environment. Keys that the desktop or web app stored under `refs` in `~/.dsh/.credentials.yaml` are therefore passed to each worker process; variables that are already set win, and no value is ever printed.
 
 ## Configuration
 
@@ -166,6 +169,10 @@ Headless jobs run `dsh --profile orchestra --json -` in the job folder. `dsho se
 | `backend` | `DSHO_BACKEND` | `auto`, `web` or `headless` |
 | `workspaces` | `DSHO_WORKSPACES` | root for new workspaces (default `~/dsh-workspaces`) |
 | `python` | `DSHO_PYTHON` | Python with Playwright for captures |
+| `provider` | `DSHO_PROVIDER` | model provider route for workers, e.g. `openrouter` (default: `~/.dsh/settings.yaml`, else `deepseek-official`) |
+| `model` | `DSHO_MODEL` | default model for jobs without `-m`, e.g. `v4-flash` |
+
+With `provider openrouter`, the short names map to OpenRouter catalog ids: `v4-flash` → `deepseek/deepseek-v4-flash`, `pro` → `deepseek/deepseek-v4-pro`, `flash` → `~deepseek/deepseek-flash-latest`.
 
 Other variables: `DSHO_HOME` (state folder, default `~/.dsho`), `DSH_HOME` (dsh home, default `~/.dsh`), `DSHO_WEB_TOKEN_URL` / `DSHO_WEB_TOKEN_FILE` (token URL of the web UI).
 
