@@ -1,0 +1,7 @@
+# LF everywhere, also in Windows checkouts: tests compare file contents and
+# the fake dsh fixtures are parsed line by line.
+* text=auto eol=lf
+*.gif binary
+*.png binary
+*.jpg binary
+*.mp4 binary

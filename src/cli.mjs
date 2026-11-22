@@ -1,7 +1,6 @@
 // dsh-cli command line: parsing, command handlers, text and JSON output.
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -11,7 +10,7 @@ import { activeProfile, EFFORTS, resolveModel } from './dsh.mjs'
 import { parseLines, timeline } from './events.mjs'
 import { GUIDE } from './guide.mjs'
 import { defaultWorkspaceRoot, jobDir } from './paths.mjs'
-import { doctor, findPython, setupProfile } from './profile.mjs'
+import { doctor, findPython, PLAYWRIGHT_HINT, setupProfile } from './profile.mjs'
 import { cancelJob, createRunnableJob, installSignalForwarding, runJob, spawnDetached } from './runner.mjs'
 import { installSkill } from './skills.mjs'
 import {
@@ -19,7 +18,7 @@ import {
 } from './store.mjs'
 import { cancelBatch, runBatch } from './supervisor.mjs'
 import { DEPTHS, MATERIAL_KINDS, materialsPrompt, researchPrompt, TEMPLATES, workdirHeader, workspaceAgentsMd } from './templates.mjs'
-import { DshoError, excerpt, fmtDuration, parseDuration, sleep, slug } from './util.mjs'
+import { DshoError, excerpt, expandHome, fmtDuration, parseDuration, sleep, slug } from './util.mjs'
 import * as web from './web.mjs'
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
@@ -107,7 +106,6 @@ function validateModelOpts(values) {
 
 const timeoutSec = (values, fallback = 1800) => (values.timeout ? parseDuration(values.timeout) : fallback)
 const dateStamp = () => new Date().toISOString().slice(0, 10)
-const expandHome = (p) => p.replace(/^~(?=$|\/)/, homedir())
 
 /** True when dir or an ancestor already is a dsh-cli workspace. */
 function insideWorkspace(dir) {
@@ -786,8 +784,10 @@ async function cmdCapture(argv) {
     return argv.length ? 0 : 2
   }
   const { python, playwright } = findPython()
-  if (!playwright) throw new DshoError('Python Playwright not found', 5, 'pip install playwright && python3 -m playwright install chromium, or set DSHO_PYTHON')
-  const res = spawnSync(python, [CAPTURE_PY, ...argv.filter((a) => a !== '--json')], { stdio: 'inherit' })
+  if (!playwright) throw new DshoError('Python Playwright not found', 5, `${PLAYWRIGHT_HINT}, or set DSHO_PYTHON`)
+  // UTF-8 output: on Windows Python would otherwise print the JSON result in the ANSI code page.
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
+  const res = spawnSync(python, [CAPTURE_PY, ...argv.filter((a) => a !== '--json')], { stdio: 'inherit', env, windowsHide: true })
   if (res.error) throw new DshoError(`cannot start ${python}: ${res.error.message}`, 5)
   return res.status ?? 1
 }

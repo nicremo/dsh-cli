@@ -1,9 +1,8 @@
 // Persistent settings in ~/.dsho/config.json. Environment variables win over
 // the file, so CI and one-off calls can still override everything.
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { home } from './paths.mjs'
-import { DshoError, readJson, writeJsonAtomic } from './util.mjs'
+import { DshoError, expandHome, readJson, writeJsonAtomic } from './util.mjs'
 
 export const CONFIG_KEYS = {
   dshRepo: { env: 'DSHO_DSH_REPO', help: 'path to a dsh source checkout (wins over dshBin)' },
@@ -17,7 +16,6 @@ export const CONFIG_KEYS = {
 }
 
 const file = () => join(home(), 'config.json')
-const expand = (v) => (typeof v === 'string' ? v.replace(/^~(?=$|\/)/, homedir()) : v)
 
 export function readConfig() {
   return readJson(file(), {}) ?? {}
@@ -26,7 +24,7 @@ export function readConfig() {
 /** Effective value: environment first, then config.json. */
 export function cfg(key) {
   const def = CONFIG_KEYS[key]
-  return expand(process.env[def.env] || readConfig()[key] || null)
+  return expandHome(process.env[def.env] || readConfig()[key] || null)
 }
 
 export function setConfig(key, value) {

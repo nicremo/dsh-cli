@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
     steps:
       - uses: actions/checkout@v4
@@ -25,5 +25,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: node bin/dsho.mjs --version && node bin/dsho.mjs help > /dev/null
+      - run: node bin/dsho.mjs --version
+      - run: node bin/dsho.mjs help
       - run: npm pack --dry-run

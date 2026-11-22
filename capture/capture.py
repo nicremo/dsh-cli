@@ -151,16 +151,43 @@ def emit(obj: dict, code: int = 0) -> None:
     sys.exit(code)
 
 
-def kill_descendants() -> None:
-    """Kill the Playwright driver and browser. Chromium runs in its own process
-    group, so every descendant's group is killed, not only our children."""
-    out = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True).stdout
+IS_WINDOWS = os.name == "nt"
+
+
+def process_children() -> dict[int, list[int]]:
+    """Map of parent pid to child pids for every process on the machine."""
+    if IS_WINDOWS:
+        cmd = [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }",
+        ]
+        flags = subprocess.CREATE_NO_WINDOW
+    else:
+        cmd, flags = ["ps", "-axo", "pid=,ppid="], 0
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, creationflags=flags).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
     children: dict[int, list[int]] = {}
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 2:
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
             children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    return children
+
+
+def kill_descendants() -> None:
+    """Kill the Playwright driver and browser. Chromium runs in its own process
+    group, so every descendant's group is killed, not only our children.
+    Windows has no process groups: taskkill ends each child's whole tree."""
+    children = process_children()
     me = os.getpid()
+    if IS_WINDOWS:
+        taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+        for pid in children.get(me, []):
+            subprocess.run([taskkill, "/PID", str(pid), "/T", "/F"], capture_output=True,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+        return
     own_group = os.getpgid(me)
     stack, found = [me], []
     while stack:
@@ -422,6 +449,10 @@ def cmd_scroll(args) -> None:
 
 
 def main() -> None:
+    # One JSON line in UTF-8 on every platform (Windows defaults to the ANSI code page).
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="dsho capture", description="Screenshots and scroll videos with Playwright")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

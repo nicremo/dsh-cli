@@ -1,7 +1,15 @@
 // Small shared helpers: ids, durations, slugs, JSON files, processes.
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+
+/** Expand a leading `~` (`~`, `~/x`, and `~\x` on Windows) to the home directory. */
+export function expandHome(value) {
+  if (typeof value !== 'string') return value
+  const m = /^~(?:$|[\\/](.*))/s.exec(value)
+  return m ? (m[1] ? join(homedir(), m[1]) : homedir()) : value
+}
 
 /** Error carrying a process exit code (2 usage, 3 not found, 4 timeout, 5 environment). */
 export class DshoError extends Error {

@@ -175,16 +175,28 @@ export function setupProfile({ mcp = 'research', from = 'web', skills, llm = tru
   }
 }
 
+const IS_WINDOWS = process.platform === 'win32'
+
+/** Python command name of this platform (`python` on Windows, `python3` elsewhere). */
+export const PYTHON = IS_WINDOWS ? 'python' : 'python3'
+
+/** How to install what `dsho capture` needs, phrased for this platform. */
+export const PLAYWRIGHT_HINT = `${PYTHON} -m pip install playwright && ${PYTHON} -m playwright install chromium`
+
 let pythonCache
 /** A python that can import playwright, for `dsho capture`. */
 export function findPython() {
   if (pythonCache) return pythonCache
-  const candidates = [cfg('python'), 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', '/opt/homebrew/bin/python3', '/usr/local/bin/python3'].filter(Boolean)
+  // Windows ships `python` (python.org, Microsoft Store) and the `py` launcher; there is no `python3.x`.
+  const platform = IS_WINDOWS
+    ? ['python', 'py', 'python3']
+    : ['python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', '/opt/homebrew/bin/python3', '/usr/local/bin/python3']
+  const candidates = [cfg('python'), ...platform].filter(Boolean)
   for (const python of candidates) {
-    const res = spawnSync(python, ['-c', 'import importlib.metadata as m; print(m.version("playwright"))'], { encoding: 'utf8', timeout: 15000 })
+    const res = spawnSync(python, ['-c', 'import importlib.metadata as m; print(m.version("playwright"))'], { encoding: 'utf8', timeout: 15000, windowsHide: true })
     if (res.status === 0) return (pythonCache = { python, playwright: res.stdout.trim() })
   }
-  return (pythonCache = { python: cfg('python') || 'python3', playwright: null })
+  return (pythonCache = { python: cfg('python') || PYTHON, playwright: null })
 }
 
 export function doctor() {
@@ -221,7 +233,7 @@ export function doctor() {
   }
 
   const py = findPython()
-  add('playwright', Boolean(py.playwright), py.playwright ? `Python Playwright ${py.playwright} (${py.python})` : 'not importable: pip install playwright && python3 -m playwright install chromium (needed for dsho capture)', true)
+  add('playwright', Boolean(py.playwright), py.playwright ? `Python Playwright ${py.playwright} (${py.python})` : `not importable: ${PLAYWRIGHT_HINT} (needed for dsho capture)`, true)
   for (const bin of ['ffmpeg', 'ffprobe', 'yt-dlp']) {
     const path = which(bin)
     add(bin, Boolean(path), path ?? 'not found', true)
