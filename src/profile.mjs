@@ -86,8 +86,10 @@ export function renderPatch({ rows, dump, skillsDir, sourceProfile, entries = []
 #
 # A curated skill folder instead of the full pool keeps the worker prompt small;
 # the .dsho-workspace marker lets workers in batch subfolders load the workspace AGENTS.md.
+# The headless template disables the credentials store; workers need it to find the API
+# keys saved in the DSH UI (Settings > Models).
 `
-  const base = [...entries]
+  const base = [{ id: 'credentials', disabled: false }, ...entries]
   if (skillsDir) base.push({ id: 'skill-filesystem', config: { includeDefaultRoots: false, customSkillDirs: [skillsDir], watch: false } })
   base.push({ id: 'agent-instructions', config: { maxBytes: 65536, projectRootMarkers: ['.git', '.dsho-workspace'] } })
   if (rows.length) base.push({ insert: rows })
@@ -233,6 +235,23 @@ export function findPython() {
 const KEY_NAME = /^[A-Z][A-Z0-9_]*_API_KEY$/
 
 /**
+ * Whether a composed profile (`dsh --dump-config` output) loads the credentials store:
+ * 'enabled', 'disabled', or null when the output has no credentials entry or is unreadable.
+ * `disabled` may be a `!!js` expression; only a literal true counts as disabled.
+ */
+export function credentialsStoreState(dumpText) {
+  try {
+    const doc = yaml.load(dumpText, { schema: schemaWithJs() })
+    const entries = Array.isArray(doc) ? doc : []
+    const entry = entries.find((e) => e?.id === 'credentials')
+    if (!entry) return null
+    return entry.disabled === true ? 'disabled' : 'enabled'
+  } catch {
+    return null
+  }
+}
+
+/**
  * Names (never values) of model API keys dsh can use: the environment, the credentials
  * store the web UI writes (`refs` and `api-key` records in ~/.dsh/.credentials.yaml)
  * and ~/.dsh/.env. A browser-session grant in the store is not an API key.
@@ -305,6 +324,14 @@ export function doctor() {
     const res = spawnSync(c.cmd, c.args, { env: c.env, cwd: home(), encoding: 'utf8', timeout: 120000, windowsHide: true })
     const why = tail(res.stderr) || res.error?.message || (res.signal ? `killed by ${res.signal}` : `exit code ${res.status}`)
     add('dsh-config', res.status === 0, res.status === 0 ? `profile ${profile} composes in ${Date.now() - t0} ms` : why)
+    if (res.status === 0) {
+      const store = credentialsStoreState(res.stdout)
+      if (store === 'disabled') {
+        add('key-store', false, `profile ${profile} does not load the credentials store: dsh alone cannot see keys saved in the DSH UI (dsho passes refs keys on; run dsho setup to enable the store)`, true)
+      } else if (store === 'enabled') {
+        add('key-store', true, `profile ${profile} loads the credentials store`, true)
+      }
+    }
   }
 
   const py = findPython()

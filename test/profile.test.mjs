@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractEntries, extractRows, LLM_ENTRIES, mcpFilter, renderPatch } from '../src/profile.mjs'
+import { credentialsStoreState, extractEntries, extractRows, LLM_ENTRIES, mcpFilter, renderPatch } from '../src/profile.mjs'
 
 const MCP = "'@deepseek-ai/dsh-mcp-client'"
 const WEB_PATCH = `# fixture with fake values only
@@ -59,6 +59,23 @@ test('renderPatch emits skill, instruction and insert rows that parse back', () 
   assert.match(text, /\.dsho-workspace/)
   assert.equal(extractRows(text, mcpFilter('all')).rows.length, 2)
   assert.doesNotMatch(renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web' }), /skill-filesystem/)
+})
+
+test('renderPatch turns the credentials store back on (the headless template disables it)', () => {
+  const { rows, dump } = extractRows('[]', () => false)
+  const text = renderPatch({ rows, dump, skillsDir: null, sourceProfile: 'web' })
+  assert.match(text, /^- id: credentials\n {2}disabled: false$/m)
+  assert.equal(credentialsStoreState(text), 'enabled')
+})
+
+test('credentialsStoreState reads a composed profile', () => {
+  const composed = (credentials) => `# == base\n- id: timer\n  name: x\n${credentials}- id: llm\n  name: y\n`
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  name: '@deepseek-ai/dsh-credentials-local'\n  disabled: true\n")), 'disabled')
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  name: '@deepseek-ai/dsh-credentials-local'\n")), 'enabled')
+  // A !!js condition is not a literal "disabled".
+  assert.equal(credentialsStoreState(composed("- id: credentials\n  disabled: !!js 'false'\n")), 'enabled')
+  assert.equal(credentialsStoreState(composed('')), null)
+  assert.equal(credentialsStoreState('not: [yaml'), null)
 })
 
 test('!!js scalars survive a copy unchanged', () => {
