@@ -119,7 +119,16 @@ export function dsho(env, args, { input = '', timeoutMs = 15000 } = {}) {
       } catch {
         // Text output.
       }
-      resolve({ code, out, err, json })
+      const res = { code, out, err, json }
+      if (json === null && args.includes('--json')) {
+        // A --json call must print JSON; say what came instead of failing later on `null.job`.
+        Object.defineProperty(res, 'json', {
+          get() {
+            throw new Error(`dsho ${args.join(' ')} printed no JSON (exit ${code})\nstdout: ${out || '(empty)'}\nstderr: ${err || '(empty)'}`)
+          },
+        })
+      }
+      resolve(res)
     })
   })
 }

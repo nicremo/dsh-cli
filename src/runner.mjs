@@ -460,6 +460,10 @@ export function spawnDetached(args) {
     windowsHide: true,
   })
   closeSync(log)
+  // A spawn failure is reported as an 'error' event; without a listener it would crash
+  // the launching command after it printed nothing. No pid means the runner never started.
+  child.on('error', () => {})
   child.unref()
+  if (!child.pid) throw new DshoError('Could not start the runner process', 5, `see ${logsDir()}`)
   return child.pid
 }
