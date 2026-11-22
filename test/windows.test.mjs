@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isolateProcess, tempDir } from './helpers.mjs'
 
 isolateProcess()
@@ -109,4 +111,25 @@ test('which prefers .exe over .cmd on Windows', { skip: process.platform !== 'wi
   } finally {
     process.env.PATH = path
   }
+})
+
+test('a runner is alive only while it holds its owner lock, whoever has its pid now', { skip: process.platform !== 'win32' && 'Windows only' }, async (t) => {
+  const { ownerAlive, ownerLockPath } = await import('../src/owner.mjs')
+  // A live pid with a lock file nobody holds: the runner died and Windows gave its pid
+  // to another process (here: this test process).
+  mkdirSync(dirname(ownerLockPath(process.pid)), { recursive: true })
+  writeFileSync(ownerLockPath(process.pid), '')
+  assert.equal(ownerAlive(process.pid), false)
+  rmSync(ownerLockPath(process.pid))
+  assert.equal(ownerAlive(process.pid), true, 'no lock: the pid decides')
+
+  // A process that holds its lock is alive; once it is killed, it is not, at once.
+  const owner = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'owner.mjs')
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `const o = await import(${JSON.stringify(pathToFileURL(owner).href)}); o.holdOwnerLock(); console.log('held'); setInterval(() => {}, 1000)`], { env: process.env, stdio: ['ignore', 'pipe', 'inherit'] })
+  t.after(() => child.kill())
+  await new Promise((resolve) => child.stdout.once('data', resolve))
+  assert.equal(ownerAlive(child.pid), true)
+  child.kill('SIGKILL')
+  await new Promise((resolve) => child.once('exit', resolve))
+  assert.equal(ownerAlive(child.pid), false)
 })

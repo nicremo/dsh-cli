@@ -41,7 +41,7 @@ critical review: 104 tests through the CLI process, the dsh boundary and pure he
 - Install instructions: the package is `@nicremo/dsh-cli` (npm rejects the unscoped name `dsh-cli`); `npm install -g github:nicremo/dsh-cli` installs the unreleased state (#4).
 - Web jobs: a stop during workspace or session setup cancels the job before its task is sent; one `session/cancel` per turn; no headless fallback once a prompt may have reached the UI (a lost answer would have run the task twice).
 - Workspaces are stored with their canonical path (macOS `/private/var`, Windows long names), the spelling dsh and the web UI use.
-- A tree kill (taskkill /T, logoff, crash) leaves the job `lost` instead of reporting a dsh failure; `last` and `last-batch` follow the creation time across processes.
+- Windows: a dead runner is reported as `lost` even after Windows gave its pid to another process (runners hold an exclusive owner lock). A tree kill (taskkill /T, logoff, crash) leaves the job `lost` instead of reporting a dsh failure; `last` and `last-batch` follow the creation time across processes.
 - `setup` copies a curated skill it cannot link (Windows junctions cannot reach network shares) and keeps the copy up to date.
 - `npm test` runs on Windows (cmd.exe kept the single quotes of the test glob and ran no tests) (#11).
 

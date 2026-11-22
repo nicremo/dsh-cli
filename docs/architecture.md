@@ -24,7 +24,7 @@ dsh-cli is a small Node ESM program without a daemon. Every command reads and wr
 ## Lifecycle of a job
 
 1. A start command (`run`, `batch`, `research`, `materials`, `continue`) resolves the backend (`auto` picks the web UI when it answers an authenticated request), creates the workspace folder and writes `job.json` plus `task.md` (the exact prompt, prefixed with the job's working folder).
-2. It spawns itself detached (`dsho __run-job <id>` or `__run-batch <id>`, own session, stdio to `~/.dsho/logs/`) and returns. The owner pid is stored on the job; a queued or running job whose owner died is reported as `lost`.
+2. It spawns itself detached (`dsho __run-job <id>` or `__run-batch <id>`, own session, stdio to `~/.dsho/logs/`) and returns. The owner pid is stored on the job; a queued or running job whose owner died is reported as `lost`. On Windows, which hands out a dead process's pid again within milliseconds, the owner additionally holds an exclusive lock on `~/.dsho/owners/<pid>.lock` for its whole life; a lock file that can be opened means its runner is gone, whoever has the pid now.
 3. The runner executes the job on its backend and keeps `job.json` current (status, session id, steps, tool calls, token usage). Cancellation is a marker file (`cancel`) in the job folder, so no two processes race on `job.json`. State files are written to a temp file and renamed into place; on Windows the rename (and a read) is retried while another process holds the file open.
 4. The final answer lands in `result.md`; the status becomes `done`, `failed`, `timeout` or `cancelled`.
 

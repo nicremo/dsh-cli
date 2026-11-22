@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs, { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
-import { isolateProcess } from './helpers.mjs'
+import { FAKE_DSH, isolateProcess } from './helpers.mjs'
 
 const dirs = isolateProcess()
 const { installSkill } = await import('../src/skills.mjs')
@@ -32,6 +32,13 @@ test('skill install copies when Windows cannot create a junction', { skip: proce
 
 test('setup copies a curated skill it cannot link, refreshes the copy and removes it when deselected', async (t) => {
   const { setupProfile } = await import('../src/profile.mjs')
+  // setup validates the profile with dsh: use the fake, never an installed dsh.
+  const previousCmd = process.env.DSHO_DSH_CMD
+  process.env.DSHO_DSH_CMD = FAKE_DSH
+  t.after(() => {
+    if (previousCmd === undefined) delete process.env.DSHO_DSH_CMD
+    else process.env.DSHO_DSH_CMD = previousCmd
+  })
   // The profile exists already, so setup does not need dsh to scaffold it.
   mkdirSync(join(dirs.dshHome, 'profiles', 'orchestra'), { recursive: true })
   writeFileSync(join(dirs.dshHome, 'profiles', 'orchestra', 'package.json'), '{}')

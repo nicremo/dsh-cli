@@ -9,7 +9,8 @@ import { modelSelection, spawnSpec } from './dsh.mjs'
 import { fold, initialState } from './events.mjs'
 import { batchDir, home, jobDir, logsDir } from './paths.mjs'
 import { createJob, readJobRaw, TERMINAL, updateJob } from './store.mjs'
-import { DshoError, nowIso, pidAlive, sleep } from './util.mjs'
+import { clearStaleOwnerLock, ownerAlive } from './owner.mjs'
+import { DshoError, nowIso, sleep } from './util.mjs'
 import * as web from './web.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/dsho.mjs', import.meta.url))
@@ -81,7 +82,7 @@ export function cancelJob(id) {
   if (TERMINAL.has(job.status)) return false
   writeFileSync(cancelMarker(id), nowIso())
   if (job.status === 'running' && job.dshPid) killGroup(job.dshPid, 'SIGTERM')
-  if (!job.ownerPid || !pidAlive(job.ownerPid)) {
+  if (!job.ownerPid || !ownerAlive(job.ownerPid)) {
     updateJob(id, { status: 'cancelled', endedAt: nowIso() })
   }
   return true
@@ -511,5 +512,7 @@ export function spawnDetached(args) {
   child.on('error', () => {})
   child.unref()
   if (!child.pid) throw new DshoError('Could not start the runner process', 5, `see ${logsDir()}`)
+  // A crashed runner may have left a lock under the pid this runner just received.
+  clearStaleOwnerLock(child.pid)
   return child.pid
 }

@@ -3,7 +3,8 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { batchDir, batchesDir, jobDir, jobsDir } from './paths.mjs'
-import { DshoError, newId, nowIso, pidAlive, readJson, writeJsonAtomic } from './util.mjs'
+import { ownerAlive } from './owner.mjs'
+import { DshoError, newId, nowIso, readJson, writeJsonAtomic } from './util.mjs'
 
 export const TERMINAL = new Set(['done', 'failed', 'cancelled', 'timeout', 'lost'])
 export const ACTIVE = new Set(['queued', 'running'])
@@ -13,7 +14,7 @@ const batchFile = (id) => join(batchDir(id), 'batch.json')
 
 /** A queued or running job whose owner process vanished is reported as lost. */
 function withDerivedStatus(job) {
-  if (job && ACTIVE.has(job.status) && job.ownerPid && !pidAlive(job.ownerPid)) {
+  if (job && ACTIVE.has(job.status) && job.ownerPid && !ownerAlive(job.ownerPid)) {
     return { ...job, status: 'lost', error: job.error ?? 'owner process exited before the job finished' }
   }
   return job

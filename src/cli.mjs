@@ -11,6 +11,7 @@ import { parseLines, timeline } from './events.mjs'
 import { GUIDE } from './guide.mjs'
 import { defaultWorkspaceRoot, jobDir } from './paths.mjs'
 import { doctor, findPython, PLAYWRIGHT_HINT, setupProfile } from './profile.mjs'
+import { holdOwnerLock } from './owner.mjs'
 import { cancelJob, createRunnableJob, installSignalForwarding, isShuttingDown, runJob, spawnDetached } from './runner.mjs'
 import { installSkill } from './skills.mjs'
 import {
@@ -984,6 +985,7 @@ export async function main(argv) {
   const [cmd, ...rest] = argv
   try {
     if (cmd === '__run-job' || cmd === '__run-batch') {
+      holdOwnerLock()
       installSignalForwarding(cmd === '__run-batch' ? { batchId: rest[0] } : {})
       if (cmd === '__run-job') await runJob(rest[0])
       else await runBatch(rest[0])
