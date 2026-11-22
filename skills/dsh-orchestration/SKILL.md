@@ -51,7 +51,8 @@ Full reference at any time: `dsho guide` and `dsho <command> --help`.
 5. **Check**: sample report.md files and screenshots, check videos with `ffprobe` and one
    still, check licences in manifest.json.
 6. **Follow up**: `dsho continue <job> "<follow-up>"` continues the same session in the same
-   folder. Analyse failures with `dsho logs <job>` and `dsho logs <job> --stderr`.
+   folder, with the job's sandbox (`--access ...` changes it for the follow-up). Analyse
+   failures with `dsho logs <job>` and `dsho logs <job> --stderr`.
 
 ## Good worker tasks
 
